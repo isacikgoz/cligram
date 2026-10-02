@@ -1,0 +1,13 @@
+title: Release
+nodes:
+  triage: Triage
+  ready:
+    text: Ready to ship?
+    kind: decision
+  ship: { text: Ship it, kind: end }
+  fix: { text: Fix it, class: agent }
+edges:
+  - triage -> ready
+  - ready -> ship: yes
+  - ready -> fix: no
+  - fix -> ready

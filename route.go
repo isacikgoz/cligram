@@ -2,6 +2,7 @@ package cligram
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 )
@@ -26,7 +27,7 @@ const (
 	costBeside   = 3  // a cell beside another group's line, running with it
 	costTouch    = 12 // a cell against a label's end
 	costSide     = 3  // leaving or arriving across the flow, per quarter turn
-	costOffset   = 1  // a cell off the middle of a side
+	costOffset   = 3  // a cell off the middle of a side: more than the line it saves
 	costSplit    = 12 // a second way out of a side for one group
 	routeMargin  = 4  // room around the picture for edges to go round it
 	searchSlack  = 8  // room around two boxes searched first
@@ -96,6 +97,9 @@ type router struct {
 	// trunk that passes a crossing goes on beyond it.
 	xlines []uint8
 	xgroup []int
+	// unbroken makes crossings dearer still, for a route that needs a long
+	// stretch for its label.
+	unbroken bool
 	// ports are the border cells edges leave through, by group.
 	ports  map[int]int
 	search search
@@ -159,10 +163,12 @@ func routeAll(l *Layout, o Orientation, ell string, lim Limits) ([]route, []erro
 			routes[i] = route{edge: e, group: groups[e.From], label: cut(e.Label, lim.LabelWidth, ell)}
 		}
 		failed, lost, warns := newRouter(l, o).routeIn(routes, order)
-		if bestFailed < 0 || len(failed) < bestFailed || (len(failed) == bestFailed && lost < bestLost) {
+		improved := bestFailed < 0 || len(failed) < bestFailed
+		if improved || (len(failed) == bestFailed && lost < bestLost) {
 			best, bestWarns, bestFailed, bestLost = routes, warns, len(failed), lost
 		}
-		if len(failed) == 0 {
+		// Done when all are drawn, or when starting over drew no more.
+		if len(failed) == 0 || !improved {
 			break
 		}
 		// The failed first, the rest as they were.
@@ -191,19 +197,84 @@ func (r *router) routeIn(routes []route, order []int) (failed []int, lost int, w
 			warns = append(warns, fmt.Errorf("edge %s has no way through and is not drawn", rt.edge.describe()))
 			continue
 		}
+		var before *snapshot
+		if rt.label != "" {
+			before = r.save()
+		}
 		r.commit(cells, rt.group)
 		rt.path = r.corners(cells)
+		if rt.label == "" {
+			continue
+		}
 		// The label goes on now, so edges routed after keep clear of it:
 		// one of the same group branches off before it, not under it.
-		if rt.label != "" {
-			rt.labelX, rt.labelY, rt.placed = r.placeLabel(cells, rt.label)
-			if !rt.placed {
-				lost++
-				warns = append(warns, fmt.Errorf("edge %s has no room for its label", rt.edge.describe()))
+		rt.labelX, rt.labelY, rt.placed = r.placeLabel(cells, rt.label)
+		if !rt.placed {
+			// Sharing a trunk can leave a branch too short for its label:
+			// route the edge again on its own, and keep that if the label
+			// fits there.
+			// Failing that, avoid crossing lines too, which cut the
+			// stretches a label needs.
+			after := r.save()
+			placed := false
+			for _, unbroken := range []bool{false, true} {
+				r.restore(before)
+				r.unbroken = unbroken
+				alone, ok := r.find(rt.edge, -1-i)
+				r.unbroken = false
+				if !ok {
+					continue
+				}
+				r.commit(alone, rt.group)
+				// It is no trunk: an edge routed later may cross it but
+				// not join it, or its label would lead two ways.
+				for _, c := range alone[1:] {
+					r.sole[c] = true
+				}
+				if x, y, ok := r.placeLabel(alone, rt.label); ok {
+					rt.path, rt.labelX, rt.labelY, rt.placed = r.corners(alone), x, y, true
+					placed = true
+					break
+				}
 			}
+			if placed {
+				continue
+			}
+			r.restore(after)
+			lost++
+			warns = append(warns, fmt.Errorf("edge %s has no room for its label", rt.edge.describe()))
 		}
 	}
 	return failed, lost, warns
+}
+
+// snapshot is the router's grid as it was, to go back to.
+type snapshot struct {
+	lines, xlines        []uint8
+	group, uses, xgroup  []int
+	blocked, label, sole []bool
+	ports                map[int]int
+}
+
+func (r *router) save() *snapshot {
+	return &snapshot{
+		lines: slices.Clone(r.lines), xlines: slices.Clone(r.xlines),
+		group: slices.Clone(r.group), uses: slices.Clone(r.uses), xgroup: slices.Clone(r.xgroup),
+		blocked: slices.Clone(r.blocked), label: slices.Clone(r.label), sole: slices.Clone(r.sole),
+		ports: maps.Clone(r.ports),
+	}
+}
+
+func (r *router) restore(s *snapshot) {
+	copy(r.lines, s.lines)
+	copy(r.xlines, s.xlines)
+	copy(r.group, s.group)
+	copy(r.uses, s.uses)
+	copy(r.xgroup, s.xgroup)
+	copy(r.blocked, s.blocked)
+	copy(r.label, s.label)
+	copy(r.sole, s.sole)
+	r.ports = maps.Clone(s.ports)
 }
 
 func abs(n int) int {
@@ -360,12 +431,12 @@ func (r *router) cellOf(x, y int) int { return y*r.w + x }
 // returns its cells: the border cell it leaves through, then every cell
 // to the one its arrowhead goes in. It looks near the two boxes first,
 // where nearly every edge is, and over the whole grid only if it must.
-func (r *router) find(e Edge, group int) ([]int, bool) {
+func (r *router) find(e Edge, group int) (cells []int, ok bool) {
 	a := r.grid(r.l.nodes[r.l.index[e.From]].rect)
 	b := r.grid(r.l.nodes[r.l.index[e.To]].rect)
 	x0, y0 := min(a.X, b.X)-searchSlack, min(a.Y, b.Y)-searchSlack
 	x1, y1 := max(a.X+a.W, b.X+b.W)+searchSlack, max(a.Y+a.H, b.Y+b.H)+searchSlack
-	cells, ok := r.findIn(e, group, Rect{x0, y0, x1 - x0, y1 - y0})
+	cells, ok = r.findIn(e, group, Rect{x0, y0, x1 - x0, y1 - y0})
 	if !ok {
 		cells, ok = r.findIn(e, group, Rect{0, 0, r.w, r.h})
 	}
@@ -494,7 +565,7 @@ func (r *router) findIn(e Edge, group int, w Rect) ([]int, bool) {
 			continue
 		}
 		nc := r.cellOf(nx, ny)
-		cost, split, ok := r.enter(nc, out, group, false)
+		cost, split, ok := r.enter(pc, nc, out, group, false)
 		if !ok {
 			continue
 		}
@@ -528,7 +599,7 @@ func (r *router) findIn(e Edge, group int, w Rect) ([]int, bool) {
 			if _, isGoal := goalCost(nc, d); q.landing[nc] == q.gen && !isGoal {
 				continue
 			}
-			cost, nsplit, ok := r.enter(nc, d, group, split)
+			cost, nsplit, ok := r.enter(c, nc, d, group, split)
 			if !ok {
 				continue
 			}
@@ -550,7 +621,7 @@ func (r *router) findIn(e Edge, group int, w Rect) ([]int, bool) {
 // enter is what moving into cell c heading d costs a line of group that
 // has split off its trunk or not, whether it has split after, and whether
 // it may enter at all.
-func (r *router) enter(c, d, group int, split bool) (int, bool, bool) {
+func (r *router) enter(prev, c, d, group int, split bool) (int, bool, bool) {
 	if r.box[c] != 0 || r.blocked[c] {
 		return 0, false, false
 	}
@@ -564,7 +635,7 @@ func (r *router) enter(c, d, group int, split bool) (int, bool, bool) {
 		if xm&along != 0 {
 			owner = r.xgroup[c]
 		}
-		if owner != group || split {
+		if owner != group || split || !r.linked(prev, c, d, group) {
 			return 0, false, false
 		}
 		return costReuse, false, true
@@ -574,17 +645,25 @@ func (r *router) enter(c, d, group int, split bool) (int, bool, bool) {
 		case r.sole[c] && m != (north|south|east|west)&^along:
 			return 0, false, false
 		case r.group[c] == group && !split && m != (north|south|east|west)&^along:
-			// Still on the trunk: along it, or turning off it.
-			if m&along != 0 {
-				cost = costReuse
+			// Still on the trunk, only where it already leads: stepping onto
+			// a branch from beside it would join two branches into a loop.
+			if !r.linked(prev, c, d, group) {
+				return 0, false, false
 			}
+			cost = costReuse
 		case m == (north|south|east|west)&^along:
 			// A crossing, of another group's line or a sibling branch. One
 			// beside a box is hard to tell from a junction or an
 			// arrowhead's line.
 			cost += costCross
 			if r.nearBox(x, y) {
+				cost += 3 * costCross // reads as a break in the line it crosses
+			}
+			if r.unbroken {
 				cost += costCross
+			}
+			if r.unbroken {
+				cost += 2 * costCross
 			}
 			split = true
 		default:
@@ -626,6 +705,31 @@ func (r *router) enter(c, d, group int, split bool) (int, bool, bool) {
 		}
 	}
 	return cost, split, true
+}
+
+// linked reports whether group's line already leads from prev into c,
+// heading d: prev is the group's way out of its box, or its line there
+// leads on that way, and c's leads back.
+func (r *router) linked(prev, c, d, group int) bool {
+	back := dirBit(opposite(d))
+	into := r.lines[c]
+	if r.group[c] != group {
+		into = r.xlines[c]
+	}
+	if into&back == 0 {
+		return false
+	}
+	if owner, ok := r.ports[prev]; ok && owner == group {
+		return true
+	}
+	from := r.lines[prev]
+	if r.group[prev] != group {
+		from = 0
+		if r.xgroup[prev] == group {
+			from = r.xlines[prev]
+		}
+	}
+	return from&dirBit(d) != 0
 }
 
 // nearBox reports whether a box is within a cell of (x, y), corners too.

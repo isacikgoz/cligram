@@ -9,6 +9,9 @@ relative placement when you want to say where things go.
 - `github.com/isacikgoz/cligram`: the diagram, layout, routing and painting.
   Its only dependency is `rivo/uniseg` (text width).
 - `github.com/isacikgoz/cligram/bubble`: a Bubble Tea component on top.
+- `github.com/isacikgoz/cligram/yaml`: reads a diagram from YAML, with
+  errors that give a line; `cmd/cligram` draws a YAML file in the
+  terminal. The README's examples are checked by `cmd/cligram`'s tests.
 - `docs/design.md`: every design decision and why. Read it before changing
   behaviour.
 - `examples/live`: the factory loop with a pretend run. `go run ./examples/live`.

@@ -80,37 +80,71 @@ func (d *Diagram) fitted(cfg layoutConfig) *Layout {
 		cfg layoutConfig
 	}
 	var all []candidate
+	nearly := 0 // ways that fit and drew every edge, but lost a label
 	for _, c := range tries {
 		l := d.place(c)
 		if l.W <= room.X && l.H <= room.Y {
-			l = d.placeAndRoute(c)
+			// Routed as it is: giving nodes more room is for the way that
+			// is kept in the end, not for every way tried.
+			l.route(c)
 			if l.W <= room.X && l.H <= room.Y && l.lost() == 0 {
 				l.fits = true
 				return l
 			}
+			if l.lost() < 1000 {
+				nearly++
+			}
 		}
 		all = append(all, candidate{l, c})
+		// A label lost in every way tried is likely lost in all: after a
+		// few, take the best of them rather than route every way there is.
+		if nearly >= fallbackTries {
+			break
+		}
 	}
 	// Nothing fits: take the one that draws the most, then keeps the width
 	// (scrolling down reads better than across), then loses the fewest
 	// labels, then is smallest. They are routed most promising first, by
 	// the size of their boxes, until one draws everything.
 	sort.SliceStable(all, func(i, j int) bool { return betterFallback(all[i].l, all[j].l, room) })
+	// Of the ways routed already, the best; if it draws every edge, the
+	// rest are not worth routing to compare labels.
 	var best *Layout
+	var bestCfg layoutConfig
 	for _, c := range all {
-		l := c.l
-		if l.routes == nil && len(l.edges) > 0 {
-			l = d.placeAndRoute(c.cfg)
+		if c.l.routes != nil || len(c.l.edges) == 0 {
+			if best == nil || betterFallback(c.l, best, room) {
+				best, bestCfg = c.l, c.cfg
+			}
 		}
-		if best == nil || betterFallback(l, best, room) {
-			best = l
+	}
+	if best == nil || best.lost() >= 1000 {
+		for _, c := range all {
+			if c.l.routes != nil || len(c.l.edges) == 0 {
+				continue
+			}
+			l := d.place(c.cfg)
+			l.route(c.cfg)
+			if best == nil || betterFallback(l, best, room) {
+				best, bestCfg = l, c.cfg
+			}
+			if best.lost() < 1000 {
+				break
+			}
 		}
-		if l.lost() == 0 {
-			break
+	}
+	// An edge walled in, in the best there is: give its nodes room.
+	if best.lost() >= 1000 {
+		if roomier := d.placeAndRoute(bestCfg); roomier.lost() < best.lost() {
+			best = roomier
 		}
 	}
 	return best
 }
+
+// fallbackTries is how many ways that draw every edge but lose a label
+// are routed before the best of them is taken.
+const fallbackTries = 2
 
 // betterFallback reports whether a is a better layout than b for room
 // when neither fits it.
