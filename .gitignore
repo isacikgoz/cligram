@@ -3,3 +3,6 @@
 # [epiq]: local hydrated state is never committed
 .epiq/events/
 .epiq/log/
+
+# go test -cpuprofile leaves the test binary behind
+*.test
