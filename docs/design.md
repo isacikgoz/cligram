@@ -40,8 +40,12 @@ and updated live while a run moves through them.
    and running along a box's side or beside another line. Edges from one
    node share a way out and branch off one trunk. Each label goes on the
    straight stretch nearest its target that only its edge uses, else across
-   a vertical stretch, else beside its line. Runs only when the graph or
-   the terminal size changes (about 15ms for the 19-step factory loop).
+   a vertical stretch, else beside its line. Every drawing must be
+   readable from its glyphs alone, which `internal/reader` checks on
+   random diagrams: split branches only cross, never rejoin; edges that
+   cannot be routed go first on a fresh attempt, then get their nodes
+   more room. Runs only when the graph or the terminal size changes
+   (about 15ms for the 19-step factory loop).
 3. **Paint.** Cell grid to string. A theme gets each run of cells with its
    part (border, text, marker, line, arrow, label), status, focus, and the
    node's kind and class. `Palette` builds one from color names: status

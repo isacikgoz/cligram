@@ -35,6 +35,7 @@ func Example() {
 	//                                   │               ╰┬─────────╯
 	//                                   └────────────────┘
 }
+
 // Placements say where a node goes relative to others; anything without
 // one is placed by following the edges.
 func Example_placements() {

@@ -165,8 +165,10 @@ the parent's `StateMsg`.
   state changes.
 - **Glyphs are single-width.** Box drawing is East Asian "ambiguous" width;
   for terminals that draw it double, use `WithGlyphs(cligram.ASCII)`.
-- **A label may find no room** in a very tight layout. It is a warning,
-  and `Fit` counts such a layout as not fitting.
+- **A label may find no room** in a very tight layout, and in a very dense
+  one an edge may find no way through. Both are warnings, and `Fit`
+  counts such a layout as not fitting; an undrawn edge counts as worse
+  than any number of lost labels.
 - **Bubble Tea asks the terminal** for its background color and cursor
   position at start. A pseudo terminal in tests must answer, or the program
   waits.
@@ -177,14 +179,83 @@ the parent's `StateMsg`.
 make test     # go test -race ./...
 make lint     # pinned golangci-lint built with this module's Go
 make golden   # rewrite testdata/*.golden; read the diff before committing
+make fuzz     # random diagrams, every drawing read back (FUZZTIME=2m)
+make pixels   # render in a real terminal engine, check the pixels (needs Node)
 ```
 
-- Drawings are tested by golden files in `testdata/`. Look at every changed
-  golden: a cost tweak in routing moves lines in drawings you did not mean
-  to touch.
-- `checkRoutes` (route_test.go) holds for every layout: lines stay out of
-  boxes, arrowheads point into their target, labels never sit on another
-  edge's line. `TestRoutesHoldOnRandomFlows` runs it on 60 random flows.
+CI (`.github/workflows/ci.yml`) runs all of it on every push: tests on the
+oldest Go `go.mod` allows and the newest, with and without `-race`; lint;
+3 minutes of fuzzing, 20 every night.
+
+### The harness: every drawing read back
+
+`internal/reader` reads a drawing from its text alone, as a person would:
+boxes by their corners, lines followed from where they leave a box,
+through junctions, crossings and labels, to an arrowhead; a label belongs
+to the one arrowhead past it. It knows only what the Unicode glyphs mean,
+never cligram's tables, so it cannot share their bugs. It refuses a
+drawing that is ambiguous: a line that leads nowhere, a line leaving two
+boxes, a label on a line two edges share.
+
+`harness_test.go` generates random diagrams (kinds, classes,
+sub-diagrams, cycles, self-loops, long, CJK and emoji text, valid and
+broken placements, both orientations, random `Fit` sizes and run states)
+and checks the reader's picture against the diagram: every node once,
+with its text; every edge from the right box to the right box, its label
+on its own line; colors and markers as the state says; no box moving
+when the state changes; views equal to crops; `Fit` honored; layout
+deterministic. `TestDrawingsReadBack` runs 400 seeds (60 under `-race`);
+`FuzzDrawings` searches for more.
+
+When it fails:
+
+- The seed is in the test name, or in `testdata/fuzz/FuzzDrawings/` for
+  the fuzzer. Commit that file: it then runs in every `go test`.
+- `cligram.Routes(l)` (export_test.go) prints a layout's routes.
+- Decide first whether the reader or the drawing is wrong. The reader is
+  wrong only if a person could read the drawing unambiguously.
+
+Rules the harness forced, all in route.go:
+
+- Branches of one node share a trunk, but once a branch splits off it
+  may only cross its siblings, never join them again.
+- A crossing cell remembers both lines, so a trunk goes on past it.
+- A label beside its line claims a clear ring and its stretch from there
+  to the target.
+- A path never passes its target's landing cells, nor its own cells.
+- Edges that find no way through are routed first and everything again;
+  if still walled in, their nodes get room all round and are laid out
+  again. Boxes keep a cell apart unless a placement says `gap: none`.
+
+### The pixel checks: drawings as a terminal shows them
+
+`make pixels` renders cases (random ones, and the factory loop) the way a
+person would see them, and checks the pixels:
+
+1. `TestExportPixelCases` writes each case: the ANSI a terminal is given,
+   and the cells it should show.
+2. `harness/pixels/render.mjs` draws them with xterm.js's WebGL renderer
+   in headless Chromium (glyphs drawn cell by cell, as GPU terminals do;
+   box drawing from the font, not drawn by xterm.js; Unicode 11 widths),
+   in JetBrains Mono and DejaVu Sans Mono with Noto fallbacks for wide
+   text and emoji, and screenshots each, plus an atlas of every glyph and
+   color on its own. Fonts are pinned by checksum (`fonts.sh`), packages
+   by `package-lock.json`.
+3. `internal/pixels` cuts each screenshot into cells and checks each looks
+   like its glyph in its color, more than like any other; a terminal that
+   measures a character's width differently from cligram shifts a row a
+   whole cell and fails. It also checks every glyph has ink, is not drawn
+   as a missing glyph, and reaches its cell's edges where lines join.
+   `TestTheChecksSeeWhatIsWrong` proves the checks fail on a row a cell
+   out, a wrong color and a missing glyph.
+
+When it fails in CI, the screenshots are uploaded as the `pixels`
+artifact. Look at them: the failure names each cell, what it should be
+and what it looks most like.
+
+`checkRoutes` (route_test.go) is the older, inside view: lines stay out
+of boxes, arrowheads point into their target, labels never sit on
+another edge's line.
 - When showing a drawing to a person, crop it by script from real output;
   never trim it by hand.
 - Check behaviour end to end in a real pseudo terminal (`examples/live`),

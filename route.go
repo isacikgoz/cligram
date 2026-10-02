@@ -2,6 +2,7 @@ package cligram
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 )
 
@@ -88,6 +89,13 @@ type router struct {
 	uses    []int
 	blocked []bool
 	label   []bool
+	// sole are line cells only their own edge may run along; another
+	// line may cross them, but not join or share them.
+	sole []bool
+	// At a crossing, the line passing the other way, and its group: a
+	// trunk that passes a crossing goes on beyond it.
+	xlines []uint8
+	xgroup []int
 	// ports are the border cells edges leave through, by group.
 	ports  map[int]int
 	search search
@@ -97,7 +105,8 @@ func newRouter(l *Layout, o Orientation) *router {
 	w, h := l.W+2*routeMargin, l.H+2*routeMargin
 	r := &router{l: l, orient: o, w: w, h: h,
 		box: make([]int, w*h), lines: make([]uint8, w*h), group: make([]int, w*h),
-		uses: make([]int, w*h), blocked: make([]bool, w*h), label: make([]bool, w*h), ports: map[int]int{}}
+		uses: make([]int, w*h), blocked: make([]bool, w*h), label: make([]bool, w*h), sole: make([]bool, w*h),
+		xlines: make([]uint8, w*h), xgroup: make([]int, w*h), ports: map[int]int{}}
 	for i, p := range l.nodes {
 		b := r.grid(p.rect)
 		for y := b.Y; y < b.Y+b.H; y++ {
@@ -118,31 +127,67 @@ func (r *router) in(x, y int) bool { return x >= 0 && y >= 0 && x < r.w && y < r
 
 // routeAll routes every edge, shortest first so the plain ones get the
 // plain lines, and returns them in the order they were written.
-func (r *router) routeAll(ell string, lim Limits) ([]route, []error) {
-	routes := make([]route, len(r.l.edges))
+// routeAll routes every edge, shortest first so the plain ones get the
+// plain lines, and returns them in the order they were written. An edge
+// that finds no way through is often only walled in by edges routed
+// before it, so the edges that failed go first and everything is routed
+// again, a few times, keeping the attempt that drew the most.
+func routeAll(l *Layout, o Orientation, ell string, lim Limits) ([]route, []error) {
 	groups := map[string]int{}
-	for i, e := range r.l.edges {
+	for _, e := range l.edges {
 		if _, ok := groups[e.From]; !ok {
 			groups[e.From] = len(groups) + 1
 		}
-		routes[i] = route{edge: e, group: groups[e.From], label: cut(e.Label, lim.LabelWidth, ell)}
 	}
-	order := make([]int, len(routes))
+	order := make([]int, len(l.edges))
 	for i := range order {
 		order[i] = i
 	}
 	length := func(i int) int {
-		a := r.l.nodes[r.l.index[routes[i].edge.From]].rect
-		b := r.l.nodes[r.l.index[routes[i].edge.To]].rect
+		e := l.edges[i]
+		a, b := l.nodes[l.index[e.From]].rect, l.nodes[l.index[e.To]].rect
 		return abs(2*a.X+a.W-2*b.X-b.W) + abs(2*a.Y+a.H-2*b.Y-b.H)
 	}
 	sort.SliceStable(order, func(a, b int) bool { return length(order[a]) < length(order[b]) })
 
-	var warns []error
+	var best []route
+	var bestWarns []error
+	bestFailed, bestLost := -1, 0
+	for range routeAttempts {
+		routes := make([]route, len(l.edges))
+		for i, e := range l.edges {
+			routes[i] = route{edge: e, group: groups[e.From], label: cut(e.Label, lim.LabelWidth, ell)}
+		}
+		failed, lost, warns := newRouter(l, o).routeIn(routes, order)
+		if bestFailed < 0 || len(failed) < bestFailed || (len(failed) == bestFailed && lost < bestLost) {
+			best, bestWarns, bestFailed, bestLost = routes, warns, len(failed), lost
+		}
+		if len(failed) == 0 {
+			break
+		}
+		// The failed first, the rest as they were.
+		next := append([]int(nil), failed...)
+		for _, i := range order {
+			if !slices.Contains(failed, i) {
+				next = append(next, i)
+			}
+		}
+		order = next
+	}
+	return best, bestWarns
+}
+
+// routeAttempts is how many times routing may start over.
+const routeAttempts = 4
+
+// routeIn routes routes in order, and says which found no way through and
+// how many labels found no room.
+func (r *router) routeIn(routes []route, order []int) (failed []int, lost int, warns []error) {
 	for _, i := range order {
 		rt := &routes[i]
 		cells, ok := r.find(rt.edge, rt.group)
 		if !ok {
+			failed = append(failed, i)
 			warns = append(warns, fmt.Errorf("edge %s has no way through and is not drawn", rt.edge.describe()))
 			continue
 		}
@@ -153,11 +198,12 @@ func (r *router) routeAll(ell string, lim Limits) ([]route, []error) {
 		if rt.label != "" {
 			rt.labelX, rt.labelY, rt.placed = r.placeLabel(cells, rt.label)
 			if !rt.placed {
+				lost++
 				warns = append(warns, fmt.Errorf("edge %s has no room for its label", rt.edge.describe()))
 			}
 		}
 	}
-	return routes, warns
+	return failed, lost, warns
 }
 
 func abs(n int) int {
@@ -232,12 +278,24 @@ func (r *router) sideCost(s Side, leaving bool) int {
 // stamping a new generation, so routing allocates almost nothing.
 const runs = jogRun + 1
 
-func (r *router) state(cell, dir, run int) int { return (cell*4+dir)*runs + run }
+// A state also knows whether the line has split off its group's trunk.
+// Before, it may run along and turn on the group's lines; after, it may
+// only cross them, as it would any other line, so two branches of one
+// node never join again and each stays readable on its own.
+func (r *router) state(cell, dir, run int, split bool) int {
+	b := 0
+	if split {
+		b = 1
+	}
+	return ((cell*4+dir)*runs+run)*2 + b
+}
 
-func (r *router) unstate(s int) (cell, dir, run int) {
+func (r *router) unstate(s int) (cell, dir, run int, split bool) {
+	split = s%2 == 1
+	s /= 2
 	run = s % runs
 	s /= runs
-	return s / 4, s % 4, run
+	return s / 4, s % 4, run, split
 }
 
 type search struct {
@@ -248,6 +306,7 @@ type search struct {
 	start    []int32  // a first step's border cell
 	goalGen  []uint32 // per cell and way in: a goal this generation
 	goalCost []int32
+	landing  []uint32 // per cell: a goal for some way in, this generation
 	heap     []item
 }
 
@@ -306,10 +365,51 @@ func (r *router) find(e Edge, group int) ([]int, bool) {
 	b := r.grid(r.l.nodes[r.l.index[e.To]].rect)
 	x0, y0 := min(a.X, b.X)-searchSlack, min(a.Y, b.Y)-searchSlack
 	x1, y1 := max(a.X+a.W, b.X+b.W)+searchSlack, max(a.Y+a.H, b.Y+b.H)+searchSlack
-	if cells, ok := r.findIn(e, group, Rect{x0, y0, x1 - x0, y1 - y0}); ok {
+	cells, ok := r.findIn(e, group, Rect{x0, y0, x1 - x0, y1 - y0})
+	if !ok {
+		cells, ok = r.findIn(e, group, Rect{0, 0, r.w, r.h})
+	}
+	// A path that comes back over itself would draw a junction or a loop
+	// out of one line: keep it off the cells it repeated, and search again.
+	var kept []int
+	defer func() {
+		for _, c := range kept {
+			r.blocked[c] = false
+		}
+	}()
+	for range 3 {
+		if !ok {
+			return nil, false
+		}
+		again := repeated(cells)
+		if len(again) == 0 {
+			return cells, true
+		}
+		for _, c := range again {
+			if !r.blocked[c] {
+				r.blocked[c] = true
+				kept = append(kept, c)
+			}
+		}
+		cells, ok = r.findIn(e, group, Rect{0, 0, r.w, r.h})
+	}
+	if ok && len(repeated(cells)) == 0 {
 		return cells, true
 	}
-	return r.findIn(e, group, Rect{0, 0, r.w, r.h})
+	return nil, false
+}
+
+// repeated are the cells a path visits more than once.
+func repeated(cells []int) []int {
+	seen := map[int]bool{}
+	var out []int
+	for _, c := range cells {
+		if seen[c] {
+			out = append(out, c)
+		}
+		seen[c] = true
+	}
+	return out
 }
 
 // findIn is find within the window w.
@@ -321,9 +421,10 @@ func (r *router) findIn(e Edge, group int, w Rect) ([]int, bool) {
 	}
 	q := &r.search
 	if q.stamp == nil {
-		n := r.w * r.h * 4 * runs
+		n := r.w * r.h * 4 * runs * 2
 		q.stamp, q.best, q.prev, q.start = make([]uint32, n), make([]int32, n), make([]int32, n), make([]int32, n)
 		q.goalGen, q.goalCost = make([]uint32, r.w*r.h*4), make([]int32, r.w*r.h*4)
+		q.landing = make([]uint32, r.w*r.h)
 	}
 	q.gen++
 	q.heap = q.heap[:0]
@@ -341,6 +442,7 @@ func (r *router) findIn(e Edge, group int, w Rect) ([]int, bool) {
 			continue
 		}
 		q.goalGen[c*4+in], q.goalCost[c*4+in] = q.gen, int32(p.cost)
+		q.landing[c] = q.gen
 		goals++
 	}
 	if goals == 0 {
@@ -365,7 +467,7 @@ func (r *router) findIn(e Edge, group int, w Rect) ([]int, bool) {
 			return
 		}
 		q.stamp[s], q.best[s], q.prev[s], q.start[s] = q.gen, g, int32(prev), int32(start)
-		c, _, _ := r.unstate(s)
+		c, _, _, _ := r.unstate(s)
 		q.push(item{g + h(c), g, int32(s)})
 	}
 
@@ -392,12 +494,12 @@ func (r *router) findIn(e Edge, group int, w Rect) ([]int, bool) {
 			continue
 		}
 		nc := r.cellOf(nx, ny)
-		cost, ok := r.enter(nc, out, group)
+		cost, split, ok := r.enter(nc, out, group, false)
 		if !ok {
 			continue
 		}
 		gc, _ := goalCost(nc, out)
-		visit(r.state(nc, out, jogRun), int32(p.cost+cost)+gc, -1, pc)
+		visit(r.state(nc, out, jogRun, split), int32(p.cost+cost)+gc, -1, pc)
 	}
 
 	for len(q.heap) > 0 {
@@ -406,13 +508,13 @@ func (r *router) findIn(e Edge, group int, w Rect) ([]int, bool) {
 		if it.g > q.best[s] {
 			continue
 		}
-		c, dir, run := r.unstate(s)
+		c, dir, run, split := r.unstate(s)
 		if _, ok := goalCost(c, dir); ok {
 			return r.cells(s), true
 		}
 		x, y := c%r.w, c/r.w
 		// A line crosses another group's straight through, never turns on it.
-		crossing := r.lines[c] != 0 && r.group[c] != group
+		crossing := r.xlines[c] != 0 || (r.lines[c] != 0 && (r.group[c] != group || split))
 		for d := range 4 {
 			if d == opposite(dir) || (crossing && d != dir) {
 				continue
@@ -422,7 +524,11 @@ func (r *router) findIn(e Edge, group int, w Rect) ([]int, bool) {
 				continue
 			}
 			nc := r.cellOf(nx, ny)
-			cost, ok := r.enter(nc, d, group)
+			// A cell beside the target is for landing in, not passing by.
+			if _, isGoal := goalCost(nc, d); q.landing[nc] == q.gen && !isGoal {
+				continue
+			}
+			cost, nsplit, ok := r.enter(nc, d, group, split)
 			if !ok {
 				continue
 			}
@@ -435,37 +541,57 @@ func (r *router) findIn(e Edge, group int, w Rect) ([]int, bool) {
 				nrun = 1
 			}
 			gc, _ := goalCost(nc, d)
-			visit(r.state(nc, d, nrun), it.g+int32(cost)+gc, s, -1)
+			visit(r.state(nc, d, nrun, nsplit), it.g+int32(cost)+gc, s, -1)
 		}
 	}
 	return nil, false
 }
 
-// enter is what moving into cell c heading d costs a line of group, and
-// whether it may at all.
-func (r *router) enter(c, d, group int) (int, bool) {
+// enter is what moving into cell c heading d costs a line of group that
+// has split off its trunk or not, whether it has split after, and whether
+// it may enter at all.
+func (r *router) enter(c, d, group int, split bool) (int, bool, bool) {
 	if r.box[c] != 0 || r.blocked[c] {
-		return 0, false
+		return 0, false, false
 	}
 	x, y := c%r.w, c/r.w
 	cost := costStep
 	along := dirBit(d) | dirBit(opposite(d))
+	if xm := r.xlines[c]; xm != 0 {
+		// Two lines cross here already: a line may only go on along one of
+		// its own, on its trunk.
+		owner := r.group[c]
+		if xm&along != 0 {
+			owner = r.xgroup[c]
+		}
+		if owner != group || split {
+			return 0, false, false
+		}
+		return costReuse, false, true
+	}
 	if m := r.lines[c]; m != 0 {
 		switch {
-		case r.group[c] == group:
+		case r.sole[c] && m != (north|south|east|west)&^along:
+			return 0, false, false
+		case r.group[c] == group && !split && m != (north|south|east|west)&^along:
+			// Still on the trunk: along it, or turning off it.
 			if m&along != 0 {
 				cost = costReuse
 			}
 		case m == (north|south|east|west)&^along:
-			// A crossing beside a box is hard to tell from a junction or
-			// an arrowhead's line.
+			// A crossing, of another group's line or a sibling branch. One
+			// beside a box is hard to tell from a junction or an
+			// arrowhead's line.
 			cost += costCross
 			if r.nearBox(x, y) {
 				cost += costCross
 			}
+			split = true
 		default:
-			return 0, false
+			return 0, false, false
 		}
+	} else {
+		split = true
 	}
 	// Beside a box: under or over one is how lines cross a gap between
 	// rows, but along its side, a line reads as a second border. Squeezed
@@ -487,18 +613,19 @@ func (r *router) enter(c, d, group int) (int, bool) {
 			break
 		}
 	}
-	// Running right beside another group's line reads as one double line.
+	// Running right beside another line, even a sibling branch, reads as
+	// one double line. Running along its own trunk is not beside it.
 	for _, k := range []int{(d + 1) % 4, (d + 3) % 4} {
 		nx, ny := x+dx[k], y+dy[k]
 		if !r.in(nx, ny) {
 			continue
 		}
-		if n := r.cellOf(nx, ny); r.group[n] != group && r.lines[n]&along != 0 {
+		if n := r.cellOf(nx, ny); r.lines[n]&along != 0 && (r.group[n] != group || split || r.lines[c] == 0) {
 			cost += costBeside
 			break
 		}
 	}
-	return cost, true
+	return cost, split, true
 }
 
 // nearBox reports whether a box is within a cell of (x, y), corners too.
@@ -517,7 +644,7 @@ func (r *router) nearBox(x, y int) bool {
 func (r *router) cells(goal int) []int {
 	var rev []int
 	for s := goal; ; {
-		c, _, _ := r.unstate(s)
+		c, _, _, _ := r.unstate(s)
 		rev = append(rev, c)
 		p := int(r.search.prev[s])
 		if p < 0 {
@@ -545,8 +672,13 @@ func (r *router) commit(cells []int, group int) {
 		} else {
 			r.blocked[c] = true
 		}
-		if r.group[c] != group && r.lines[c] != 0 {
-			continue // a crossing: the other line keeps the cell
+		if r.lines[c] != 0 && (r.group[c] != group || crosses(r.lines[c], m)) {
+			// A crossing: the line there keeps the cell, and the one
+			// passing it is remembered.
+			if crosses(r.lines[c], m) && r.xlines[c] == 0 {
+				r.xlines[c], r.xgroup[c] = m, group
+			}
+			continue
 		}
 		r.lines[c] |= m
 		r.group[c] = group
@@ -656,36 +788,64 @@ func (r *router) placeLabel(cells []int, label string) (int, int, bool) {
 		return x, y, true
 	}
 	// Last, beside its own line where there is room: to the side of a
-	// stretch down, or over or under one across.
-	free := func(x, y int) bool {
-		for k := -labelPadding; k < lw+labelPadding; k++ {
-			if !r.in(x+k, y) {
-				return false
+	// stretch down, or over or under one across. Off its line, a label is
+	// known by what lies next to it, so it claims a ring a cell wide: no
+	// line but its own may be in it, now or later, and its own stretch is
+	// its edge's alone from now on.
+	claim := func(x, y int, stretch []int, anchor int) bool {
+		mine := map[int]bool{}
+		for _, c := range stretch {
+			mine[c] = true
+		}
+		var ring []int
+		for yy := y - 1; yy <= y+1; yy++ {
+			for xx := x - 2; xx < x+lw+2; xx++ {
+				if !r.in(xx, yy) {
+					return false
+				}
+				c := r.cellOf(xx, yy)
+				onLabel := yy == y && xx >= x-labelPadding && xx < x+lw+labelPadding
+				switch {
+				case onLabel && (r.box[c] != 0 || r.lines[c] != 0 || r.blocked[c]):
+					return false
+				case r.lines[c] != 0 && !mine[c]:
+					return false
+				}
+				if !onLabel && r.box[c] == 0 && r.lines[c] == 0 {
+					ring = append(ring, c)
+				}
 			}
-			c := r.cellOf(x+k, y)
-			if r.box[c] != 0 || r.lines[c] != 0 || r.blocked[c] {
-				return false
-			}
+		}
+		r.keep(x, y, lw, labelPadding)
+		for _, c := range ring {
+			r.blocked[c] = true
+		}
+		// From just before the label on to the target the line is its
+		// edge's alone; before that, a sibling may share it and branch off.
+		for _, c := range stretch[max(anchor-1, 0):] {
+			r.sole[c] = true
 		}
 		return true
 	}
 	vertical, across := runs(north|south, r.w), runs(east|west, 1)
 	for i := len(vertical) - 1; i >= 0; i-- {
-		mid := cells[vertical[i].from+vertical[i].n/2]
+		v := vertical[i]
+		mid := cells[v.from+v.n/2]
 		lx, ly := mid%r.w, mid/r.w
 		for _, x := range []int{lx + 1 + labelPadding, lx - labelPadding - lw} {
-			if free(x, ly) {
-				r.keep(x, ly, lw, 0)
+			if claim(x, ly, cells[v.from:v.from+v.n], v.n/2) {
 				return x, ly, true
 			}
 		}
 	}
 	for i := len(across) - 1; i >= 0; i-- {
-		a, b := cells[across[i].from], cells[across[i].from+across[i].n-1]
-		x := min(a%r.w, b%r.w) + min(labelLead, max(across[i].n-lw, 0))
-		for _, y := range []int{a/r.w - 1, a/r.w + 1} {
-			if free(x, y) {
-				r.keep(x, y, lw, 0)
+		a := across[i]
+		first, last := cells[a.from], cells[a.from+a.n-1]
+		x := min(first%r.w, last%r.w) + min(labelLead, max(a.n-lw, 0))
+		stretch := cells[a.from : a.from+a.n]
+		anchor := slices.IndexFunc(stretch, func(c int) bool { return c%r.w >= x && c%r.w < x+lw })
+		for _, y := range []int{first/r.w - 1, first/r.w + 1} {
+			if claim(x, y, stretch, max(anchor, 0)) {
 				return x, y, true
 			}
 		}

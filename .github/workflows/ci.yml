@@ -1,0 +1,86 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *" # a longer fuzz run every night
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest Go go.mod allows, and the newest.
+        go: [go.mod, stable]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ matrix.go == 'go.mod' && 'go.mod' || '' }}
+          go-version: ${{ matrix.go == 'stable' && 'stable' || '' }}
+      - name: go.mod is tidy
+        run: go mod tidy -diff
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      # Every drawing the harness makes is read back; 400 seeds here, a
+      # few under the race detector below.
+      - run: go test -count=1 ./...
+      - run: go test -race -count=1 ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make lint
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: draw random diagrams and read them back
+        run: make fuzz FUZZTIME=${{ github.event_name == 'schedule' && '20m' || '3m' }}
+      # A failing input is the seed of a diagram cligram draws wrong: commit
+      # it under testdata/fuzz/ and every test after runs it.
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-failures
+          path: testdata/fuzz/
+
+  pixels:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: harness/pixels/package-lock.json
+      # The pinned Playwright, and its browser's system libraries.
+      - run: npm ci && npx playwright install --with-deps chromium
+        working-directory: harness/pixels
+      - name: render drawings in xterm.js and check them cell by cell
+        run: make pixels PIXELS_CASES=60
+      # The screenshots, to see what a failing cell looked like.
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pixels
+          path: harness/pixels/out/

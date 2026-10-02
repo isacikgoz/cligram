@@ -1,5 +1,7 @@
 package cligram
 
+import "sort"
+
 // A terminal is only so big. Fit lays a diagram out to fit it, trying the
 // cheapest changes first and changing the shape of the flow before cutting
 // any of its words; what still does not fit is shown through a view that
@@ -71,50 +73,72 @@ func (d *Diagram) fitted(cfg layoutConfig) *Layout {
 	}
 
 	// Placing the boxes is cheap and routing is not, so a way whose boxes
-	// alone do not fit is never routed unless it is the best there is. A
-	// way fits only if every label found a place too.
-	var best *Layout
-	var bestCfg layoutConfig
-	better := func(l *Layout) bool {
-		if best == nil {
-			return true
-		}
-		lw, bw := l.W <= room.X, best.W <= room.X
-		switch {
-		case lw != bw:
-			return lw
-		case l.lost() != best.lost():
-			return l.lost() < best.lost()
-		case lw:
-			return l.H < best.H
-		}
-		return l.W < best.W
+	// alone do not fit is not routed while another might fit. A way fits
+	// only if it drew every edge and every label too.
+	type candidate struct {
+		l   *Layout
+		cfg layoutConfig
 	}
+	var all []candidate
 	for _, c := range tries {
 		l := d.place(c)
 		if l.W <= room.X && l.H <= room.Y {
-			l.route(c)
+			l = d.placeAndRoute(c)
 			if l.W <= room.X && l.H <= room.Y && l.lost() == 0 {
 				l.fits = true
 				return l
 			}
 		}
-		if better(l) {
-			best, bestCfg = l, c
-		}
+		all = append(all, candidate{l, c})
 	}
-	if best.routes == nil && len(best.edges) > 0 {
-		best = d.place(bestCfg)
-		best.route(bestCfg)
+	// Nothing fits: take the one that draws the most, then keeps the width
+	// (scrolling down reads better than across), then loses the fewest
+	// labels, then is smallest. They are routed most promising first, by
+	// the size of their boxes, until one draws everything.
+	sort.SliceStable(all, func(i, j int) bool { return betterFallback(all[i].l, all[j].l, room) })
+	var best *Layout
+	for _, c := range all {
+		l := c.l
+		if l.routes == nil && len(l.edges) > 0 {
+			l = d.placeAndRoute(c.cfg)
+		}
+		if best == nil || betterFallback(l, best, room) {
+			best = l
+		}
+		if l.lost() == 0 {
+			break
+		}
 	}
 	return best
 }
 
-// lost is how many labels found no place; before routing, none have.
+// betterFallback reports whether a is a better layout than b for room
+// when neither fits it.
+func betterFallback(a, b *Layout, room Point) bool {
+	undrawn := func(l *Layout) int { return l.lost() / 1000 }
+	aw, bw := a.W <= room.X, b.W <= room.X
+	switch {
+	case undrawn(a) != undrawn(b):
+		return undrawn(a) < undrawn(b)
+	case aw != bw:
+		return aw
+	case a.lost() != b.lost():
+		return a.lost() < b.lost()
+	case aw:
+		return a.H < b.H
+	}
+	return a.W < b.W
+}
+
+// lost is what a layout failed to draw: each edge with no way through
+// counts as worse than any number of lost labels.
 func (l *Layout) lost() int {
 	n := 0
 	for _, rt := range l.routes {
-		if rt.label != "" && !rt.placed {
+		switch {
+		case rt.path == nil:
+			n += 1000
+		case rt.label != "" && !rt.placed:
 			n++
 		}
 	}

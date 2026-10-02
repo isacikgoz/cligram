@@ -204,9 +204,9 @@ func (c *canvas) path(pts []Point, group int, st Style, arrow bool) {
 			continue // a box or a label is never drawn over
 		}
 		switch {
-		case here.lines == 0 || here.group == group:
-			here.lines |= m
 		case crosses(here.lines, m):
+			// A straight line across another, even one of its own group's
+			// branches, crosses it: the one drawn last passes over.
 			here.lines = m
 		default:
 			here.lines |= m

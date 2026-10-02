@@ -1,6 +1,9 @@
 package cligram
 
-import "fmt"
+import (
+	"fmt"
+	"maps"
+)
 
 // Orientation is the way a flow reads: each step's ways on go that way
 // from it, and steps that share a parent stack across it.
@@ -27,6 +30,9 @@ type layoutConfig struct {
 	// wordWidth is the widest a word may make a line: the width the text
 	// was given before any narrowing.
 	wordWidth int
+	// pad is room kept clear round a node, by id, for edges that could
+	// not find a way to it without.
+	pad map[string]int
 }
 
 // WithGlyphs draws with g instead of Unicode.
@@ -143,11 +149,46 @@ func (d *Diagram) Layout(opts ...LayoutOption) *Layout {
 	if cfg.fit != nil {
 		return d.fitted(cfg)
 	}
-	l := d.place(cfg)
-	l.route(cfg)
+	l := d.placeAndRoute(cfg)
 	l.fits = true
 	return l
 }
+
+// placeAndRoute places the nodes and routes the edges. An edge with no way
+// through is most often walled in where it ends, so its two nodes are
+// given room all round and everything is laid out again, a few times,
+// keeping the layout that drew the most.
+func (d *Diagram) placeAndRoute(cfg layoutConfig) *Layout {
+	l := d.place(cfg)
+	l.route(cfg)
+	pad := map[string]int{}
+	for range roomAttempts {
+		if l.lost() < 1000 {
+			break
+		}
+		for _, rt := range l.routes {
+			if rt.path == nil {
+				pad[rt.edge.From] += roomPad
+				pad[rt.edge.To] += roomPad
+			}
+		}
+		c := cfg
+		c.pad = maps.Clone(pad)
+		next := d.place(c)
+		next.route(c)
+		if next.lost() < l.lost() {
+			l = next
+		}
+	}
+	return l
+}
+
+// roomAttempts is how many times nodes get more room for edges to reach
+// them; roomPad is how much more, each time, in cells all round.
+const (
+	roomAttempts = 3
+	roomPad      = 2
+)
 
 // place gives every node its place, and the picture the size of the boxes.
 func (d *Diagram) place(cfg layoutConfig) *Layout {
@@ -196,7 +237,7 @@ func (d *Diagram) place(cfg layoutConfig) *Layout {
 
 // route routes the edges and frames the picture around everything.
 func (l *Layout) route(cfg layoutConfig) {
-	routes, warns := newRouter(l, cfg.orient).routeAll(cfg.glyphs.Ellipsis, cfg.limits)
+	routes, warns := routeAll(l, cfg.orient, cfg.glyphs.Ellipsis, cfg.limits)
 	l.routes = routes
 	l.warnings = append(l.warnings, warns...)
 	l.frame()
@@ -282,6 +323,10 @@ type layouter struct {
 	why map[int]string
 	// compact closes default gaps down to tight.
 	compact bool
+	// touching are the pairs a placement put flat against each other.
+	touching map[[2]int]bool
+	// pad is the room kept clear round each node.
+	pad []int
 	// breaks are the nodes the flow wraps at; beside, the nodes auto put
 	// beside their step; order, the order auto followed them in.
 	breaks map[int]bool
@@ -327,14 +372,26 @@ func newLayouter(l *Layout, cfg layoutConfig) *layouter {
 	y.band = make([]int, n)
 	y.parent = make([]int, n)
 	y.breaks = map[int]bool{}
+	y.touching = map[[2]int]bool{}
+	y.pad = make([]int, n)
+	for i, p := range l.nodes {
+		y.pad[i] = cfg.pad[p.node.ID]
+	}
 	return y
 }
 
+// size is node i's size on ax, with the room kept clear round it.
 func (y *layouter) size(i int, ax axis) int {
 	if ax == axisX {
-		return y.l.nodes[i].rect.W
+		return y.l.nodes[i].rect.W + 2*y.pad[i]
 	}
-	return y.l.nodes[i].rect.H
+	return y.l.nodes[i].rect.H + 2*y.pad[i]
+}
+
+// box is node i's rect with the room kept clear round it.
+func (y *layouter) box(i int) Rect {
+	r, p := y.l.nodes[i].rect, y.pad[i]
+	return Rect{r.X - p, r.Y - p, r.W + 2*p, r.H + 2*p}
 }
 
 func (y *layouter) group() int { y.groups++; return y.groups }
@@ -419,6 +476,9 @@ func forward(r Relation, ax axis) bool {
 // direction keeps node i at least a gap from every target, on ax.
 func (y *layouter) direction(i int, r Relation, ax axis, targets []int, gap Gap, g int, p prio) {
 	for _, t := range targets {
+		if gap.Size == GapNone || (gap.Size == GapCells && gap.Cells == 0) {
+			y.touching[[2]int{min(i, t), max(i, t)}] = true
+		}
 		cells := y.gap(gap, ax)
 		if gap.Size == GapDefault {
 			cells = max(cells, y.labelRoom(i, t, ax))
@@ -641,13 +701,15 @@ func (y *layouter) solve() {
 		}
 		for i := range y.l.nodes {
 			r := &y.l.nodes[i].rect
-			r.X, r.Y = pos[axisX][i], pos[axisY][i]
+			r.X, r.Y = pos[axisX][i]+y.pad[i], pos[axisY][i]+y.pad[i]
 		}
 		moved := false
 		for a := range n {
 			for b := a + 1; b < n; b++ {
-				ra, rb := y.l.nodes[a].rect, y.l.nodes[b].rect
-				if apart[[2]int{a, b}] || !overlaps(ra, rb) {
+				ra, rb := y.box(a), y.box(b)
+				// Boxes keep a cell apart, for the lines and arrowheads
+				// between them, unless a placement asked them to touch.
+				if apart[[2]int{a, b}] || !overlaps(grow(ra), rb) || y.touching[[2]int{a, b}] {
 					continue
 				}
 				apart[[2]int{a, b}] = true
@@ -733,6 +795,9 @@ func (y *layouter) softValue(sf soft, pos []int) int {
 	return lo + floorDiv(hi-lo-size, 2)
 }
 
+// grow is r with a cell more all round.
+func grow(r Rect) Rect { return Rect{r.X - 1, r.Y - 1, r.W + 2, r.H + 2} }
+
 func overlaps(a, b Rect) bool {
 	return a.X < b.X+b.W && b.X < a.X+a.W && a.Y < b.Y+b.H && b.Y < a.Y+a.H
 }
@@ -740,7 +805,7 @@ func overlaps(a, b Rect) bool {
 // separate moves a and b apart, trying the axis they overlap least on
 // first, and reports whether it could.
 func (y *layouter) separate(a, b int) bool {
-	ra, rb := y.l.nodes[a].rect, y.l.nodes[b].rect
+	ra, rb := y.box(a), y.box(b)
 	over := [2]int{
 		min(ra.X+ra.W, rb.X+rb.W) - max(ra.X, rb.X),
 		min(ra.Y+ra.H, rb.Y+rb.H) - max(ra.Y, rb.Y),
@@ -780,11 +845,12 @@ func (y *layouter) warnDropped(groups []int) {
 	}
 }
 
+// pos is where node i's room starts on ax.
 func (y *layouter) pos(i int, ax axis) int {
 	if ax == axisX {
-		return y.l.nodes[i].rect.X
+		return y.l.nodes[i].rect.X - y.pad[i]
 	}
-	return y.l.nodes[i].rect.Y
+	return y.l.nodes[i].rect.Y - y.pad[i]
 }
 
 // normalize moves the picture to the top left corner and sizes it.
