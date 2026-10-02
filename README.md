@@ -4,7 +4,7 @@ Flow diagrams for the terminal, from YAML or Go. Like Mermaid, but drawn in
 text: boxes, decisions and labelled edges, laid out to fit your terminal,
 and repainted live as a run moves through them.
 
-[![100 random diagrams, each drawn by cligram and read back as a check](https://asciinema.org/a/gWsYXyq89czfDDtD.svg)](https://asciinema.org/a/gWsYXyq89czfDDtD)
+[![100 random diagrams, each drawn by cligram and read back as a check](docs/fuzz.svg)](https://asciinema.org/a/gWsYXyq89czfDDtD)
 
 *100 random diagrams, each drawn and then read back from the text alone to
 check it says what the diagram says. Click to play.*
