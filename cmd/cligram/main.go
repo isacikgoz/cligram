@@ -20,8 +20,6 @@ import (
 	"io"
 	"os"
 
-	"github.com/charmbracelet/x/term"
-
 	"github.com/isacikgoz/cligram/internal/draw"
 )
 
@@ -78,34 +76,23 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		flags.Usage()
 		return 2
 	}
-	if *color != "auto" && *color != "always" && *color != "never" {
+	if !validColor(*color) {
 		complain("cligram: -color is auto, always or never, not", *color)
 		return 2
 	}
-
-	var data []byte
-	var err error
-	if name := flags.Arg(0); name == "" || name == "-" {
-		data, err = io.ReadAll(stdin)
-	} else {
-		data, err = os.ReadFile(name)
-	}
+	data, err := readSource(flags.Arg(0), stdin)
 	if err != nil {
 		complain("cligram:", err)
 		return 1
 	}
 
 	tty := isTerminal(stdout)
-	if *width == 0 && tty {
-		if f, ok := stdout.(*os.File); ok {
-			if w, h, err := term.GetSize(f.Fd()); err == nil {
-				*width, *height = w, h
-			}
-		}
+	if w, h, ok := terminalSize(stdout); ok && *width == 0 {
+		*width, *height = w, h
 	}
 	d, err := draw.Draw(draw.Request{
 		Source: string(data), Format: *format, Width: *width, Height: *height,
-		ASCII: *ascii, Color: *color == "always" || (*color == "auto" && tty && !*asJSON),
+		ASCII: *ascii, Color: colored(*color, tty && !*asJSON),
 	})
 	if err != nil {
 		complain("cligram:", err)
@@ -152,32 +139,23 @@ func runMarkdown(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		flags.Usage()
 		return 2
 	}
-	if *color != "auto" && *color != "always" && *color != "never" {
+	if !validColor(*color) {
 		complain("cligram md: -color is auto, always or never, not", *color)
 		return 2
 	}
-	var data []byte
-	var err error
-	if name := flags.Arg(0); name == "" || name == "-" {
-		data, err = io.ReadAll(stdin)
-	} else {
-		data, err = os.ReadFile(name)
-	}
+	data, err := readSource(flags.Arg(0), stdin)
 	if err != nil {
 		complain("cligram md:", err)
 		return 1
 	}
-	tty := isTerminal(stdout)
 	if *width == 0 {
 		*width = 100
-		if f, ok := stdout.(*os.File); ok && tty {
-			if w, _, err := term.GetSize(f.Fd()); err == nil {
-				*width = w
-			}
+		if w, _, ok := terminalSize(stdout); ok {
+			*width = w
 		}
 	}
 	out, problems := draw.Markdown(string(data), draw.Request{
-		Width: *width, ASCII: *ascii, Color: *color == "always" || (*color == "auto" && tty),
+		Width: *width, ASCII: *ascii, Color: colored(*color, isTerminal(stdout)),
 	})
 	for _, p := range problems {
 		complain("cligram md:", p)
@@ -187,9 +165,4 @@ func runMarkdown(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
-}
-
-func isTerminal(f any) bool {
-	file, ok := f.(*os.File)
-	return ok && term.IsTerminal(file.Fd())
 }

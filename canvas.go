@@ -126,9 +126,9 @@ func (c *canvas) box(r Rect, stacked bool, lines []string, st Style) {
 	front := r
 	if stacked {
 		front.W, front.H = r.W-1, r.H-1
-		c.frame(Rect{X: r.X + 1, Y: r.Y + 1, W: front.W, H: front.H}, st.Kind, b, part(PartBorder))
+		c.boxBorder(Rect{X: r.X + 1, Y: r.Y + 1, W: front.W, H: front.H}, st.Kind, b, part(PartBorder))
 	}
-	c.frame(front, st.Kind, b, part(PartBorder))
+	c.boxBorder(front, st.Kind, b, part(PartBorder))
 	for y := front.Y + 1; y < front.Y+front.H-1; y++ {
 		for x := front.X + 1; x < front.X+front.W-1; x++ {
 			c.put(x, y, " ", 1, part(PartText))
@@ -140,9 +140,9 @@ func (c *canvas) box(r Rect, stacked bool, lines []string, st Style) {
 	}
 }
 
-// frame draws a box's border. Drawn second, a stacked box's front frame
-// covers the back one wherever they meet.
-func (c *canvas) frame(r Rect, kind Kind, b Borders, st Style) {
+// boxBorder draws a box's border. Drawn second, a stacked box's front
+// border covers the back one wherever they meet.
+func (c *canvas) boxBorder(r Rect, kind Kind, b Borders, st Style) {
 	x0, y0, x1, y1 := r.X, r.Y, r.X+r.W-1, r.Y+r.H-1
 	side := func(x, y int, g string, s Side) {
 		c.put(x, y, g, 1, st)

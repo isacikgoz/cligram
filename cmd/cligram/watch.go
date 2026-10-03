@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/x/term"
 	"github.com/rivo/uniseg"
 
 	"github.com/isacikgoz/cligram"
@@ -46,7 +45,7 @@ func runWatch(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		flags.Usage()
 		return 2
 	}
-	if *color != "auto" && *color != "always" && *color != "never" {
+	if !validColor(*color) {
 		complain("cligram watch: -color is auto, always or never, not", *color)
 		return 2
 	}
@@ -61,7 +60,7 @@ func runWatch(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	tty := isTerminal(stdout)
-	req := draw.Request{ASCII: *ascii, Color: *color == "always" || (*color == "auto" && tty)}
+	req := draw.Request{ASCII: *ascii, Color: colored(*color, tty)}
 	title := src.Title
 	if title == "" {
 		title = flags.Arg(0)
@@ -91,10 +90,8 @@ func runWatch(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 	}
 
-	if f, ok := stdout.(*os.File); ok && tty && *width == 0 {
-		if w, _, err := term.GetSize(f.Fd()); err == nil {
-			*width = w
-		}
+	if w, _, ok := terminalSize(stdout); ok && *width == 0 {
+		*width = w
 	}
 	req.Width, req.State = *width, st
 	opts, err := req.Options(src)

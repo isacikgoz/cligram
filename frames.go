@@ -241,7 +241,7 @@ func (y *layouter) keepApart(as []int, da map[int]int, wa int, bs []int, db map[
 				}
 			}
 			_, dropped := s.solve()
-			if contains(dropped, g) {
+			if slices.Contains(dropped, g) {
 				continue
 			}
 			y.warnDropped(dropped)

@@ -139,7 +139,7 @@ var Markers = map[string]string{" ": "idle", "▸": "active", "✓": "done", "�
 
 // Box is a node as drawn.
 type Box struct {
-	X, Y, W, H int // its whole cells, a stacked box's back frame too
+	X, Y, W, H int // its whole cells, a stacked box's back border too
 	Kind       Kind
 	Stacked    bool
 	Marker     string   // the status marker, " " for none
@@ -258,7 +258,7 @@ func (r *read) box(x0, y0 int, f family) {
 	if !r.is(x1, y1, f.br) {
 		r.fail("box at (%d,%d): no bottom right corner", x0, y0)
 	}
-	// Stacked: a back frame one cell down and right.
+	// Stacked: a back border one cell down and right.
 	b.Stacked = r.is(x1+1, y0+1, f.tr) && r.is(x0+1, y1+1, f.bl) && r.is(x1+1, y1+1, f.br)
 	frontRight := x1
 	if !b.Stacked {
@@ -292,7 +292,7 @@ func (r *read) box(x0, y0 int, f family) {
 	for y := y0; y < y0+b.H; y++ {
 		for x := x0; x < x0+b.W; x++ {
 			if b.Stacked && ((x == x0+b.W-1 && y == y0) || (y == y0+b.H-1 && x == x0)) {
-				continue // the corners the back frame leaves empty
+				continue // the corners the back border leaves empty
 			}
 			r.owner[pt{x, y}] = idx
 		}
@@ -428,115 +428,145 @@ func (r *read) mask(p pt) uint8 {
 }
 
 // trace follows every line: it joins the cells a line leads between into
-// networks, each of which must leave one box and end in arrowheads.
+// networks, each of which must leave one box and end in arrowheads, and
+// gives each label to the edge it is on.
 func (r *read) trace() {
-	// A union of everything that carries a line: line cells, ports,
-	// arrowheads.
-	parent := map[pt]pt{}
-	var find func(pt) pt
-	find = func(p pt) pt {
-		q, ok := parent[p]
-		if !ok || q == p {
-			parent[p] = p
-			return p
-		}
-		root := find(q)
-		parent[p] = root
-		return root
-	}
-	union := func(a, b pt) { parent[find(a)] = find(b) }
-	// labelJoins are the joins a label sits on, so its edge can be told.
-	type join struct{ a, b pt }
-	labelJoins := map[int][]join{}
+	t := &tracer{r: r, parent: map[pt]pt{}, labelJoins: map[int][]join{}}
+	t.joinLines()
+	t.edges(t.arrowheads())
+	t.labels()
+}
 
-	// next is where a line at p heading way d leads: the cell it joins,
-	// with the label it passes through on the way, if any.
-	next := func(p pt, d uint8) (pt, int, bool) {
-		var dx, dy int
-		for _, dd := range dirs {
-			if dd.bit == d {
-				dx, dy = dd.dx, dd.dy
-			}
+// tracer joins the cells that carry a line into networks.
+type tracer struct {
+	r *read
+	// parent unions everything that carries a line: line cells, ports,
+	// arrowheads.
+	parent map[pt]pt
+	// labelJoins are the joins a label sits on, so its edge can be told.
+	labelJoins map[int][]join
+}
+
+type join struct{ a, b pt }
+
+// sink is an arrowhead, and the box it points into.
+type sink struct {
+	at  pt
+	box int
+}
+
+func (t *tracer) find(p pt) pt {
+	q, ok := t.parent[p]
+	if !ok || q == p {
+		t.parent[p] = p
+		return p
+	}
+	root := t.find(q)
+	t.parent[p] = root
+	return root
+}
+
+func (t *tracer) union(a, b pt) { t.parent[t.find(a)] = t.find(b) }
+
+// next is where a line at p heading way d leads: the cell it joins, with
+// the label it passes through on the way, if any.
+func (t *tracer) next(p pt, d uint8) (pt, int, bool) {
+	r := t.r
+	var dx, dy int
+	for _, dd := range dirs {
+		if dd.bit == d {
+			dx, dy = dd.dx, dd.dy
 		}
-		q := pt{p.x + dx, p.y + dy}
-		through := -1
-		across := e | w
-		if d == e || d == w {
-			across = n | s
-		}
-		for {
-			if li, ok := r.label[q]; ok {
-				// Through a label: across one, along the row; or astride
-				// one, on down the column.
-				l := r.lbls[li]
-				through = li
-				if d == e || d == w {
-					x := l.x - 1
-					if d == e {
-						x = l.x + l.w
-					}
-					q = pt{x, q.y}
-				} else {
-					q = pt{q.x, q.y + dy}
+	}
+	q := pt{p.x + dx, p.y + dy}
+	through := -1
+	across := e | w
+	if d == e || d == w {
+		across = n | s
+	}
+	for {
+		if li, ok := r.label[q]; ok {
+			// Through a label: across one, along the row; or astride one,
+			// on down the column.
+			l := r.lbls[li]
+			through = li
+			if d == e || d == w {
+				x := l.x - 1
+				if d == e {
+					x = l.x + l.w
 				}
-				continue
+				q = pt{x, q.y}
+			} else {
+				q = pt{q.x, q.y + dy}
 			}
-			if r.mask(q) == across {
-				// A straight line across the way is a crossing: the line
-				// passes under it.
-				q = pt{q.x + dx, q.y + dy}
-				continue
-			}
-			break
+			continue
 		}
-		return q, through, true
+		if r.mask(q) == across {
+			// A straight line across the way is a crossing: the line passes
+			// under it.
+			q = pt{q.x + dx, q.y + dy}
+			continue
+		}
+		break
 	}
-	accepts := func(q pt, d uint8) bool {
-		// q takes a line arriving at it heading d.
-		if m := r.mask(q); m != 0 {
-			return m&opposite(d) != 0
-		}
-		if a, ok := arrows[r.g.at(q.x, q.y).G]; ok && r.mask(q) == 0 {
-			if _, inLabel := r.label[q]; !inLabel {
-				return a == d
-			}
-		}
-		if way, ok := r.port[q]; ok {
-			return way == opposite(d)
-		}
-		return false
+	return q, through, true
+}
+
+// accepts reports whether q takes a line arriving at it heading d.
+func (t *tracer) accepts(q pt, d uint8) bool {
+	r := t.r
+	if m := r.mask(q); m != 0 {
+		return m&opposite(d) != 0
 	}
-	link := func(p pt, d uint8) {
-		q, li, _ := next(p, d)
-		if !accepts(q, d) {
-			r.fail("line at (%d,%d) leads %s into %q at (%d,%d)", p.x, p.y, name(d), r.g.at(q.x, q.y).G, q.x, q.y)
-			return
-		}
-		union(p, q)
-		if li >= 0 {
-			labelJoins[li] = append(labelJoins[li], join{p, q})
+	if a, ok := arrows[r.g.at(q.x, q.y).G]; ok && r.mask(q) == 0 {
+		if _, inLabel := r.label[q]; !inLabel {
+			return a == d
 		}
 	}
+	if way, ok := r.port[q]; ok {
+		return way == opposite(d)
+	}
+	return false
+}
+
+// link joins p to where its line heading d leads, which must take it.
+func (t *tracer) link(p pt, d uint8) {
+	r := t.r
+	q, li, _ := t.next(p, d)
+	if !t.accepts(q, d) {
+		r.fail("line at (%d,%d) leads %s into %q at (%d,%d)", p.x, p.y, name(d), r.g.at(q.x, q.y).G, q.x, q.y)
+		return
+	}
+	t.union(p, q)
+	if li >= 0 {
+		t.labelJoins[li] = append(t.labelJoins[li], join{p, q})
+	}
+}
+
+// joinLines joins every line cell and port to where its lines lead.
+func (t *tracer) joinLines() {
+	r := t.r
 	for y := 0; y < r.g.H; y++ {
 		for x := range r.g.Cells[y] {
 			p := pt{x, y}
 			if m := r.mask(p); m != 0 {
 				for _, d := range dirs {
 					if m&d.bit != 0 {
-						link(p, d.bit)
+						t.link(p, d.bit)
 					}
 				}
 			}
 		}
 	}
 	for p, way := range r.port {
-		link(p, way)
+		t.link(p, way)
 	}
-	// Arrowheads: each points into a box, and a line arrives behind it.
-	type sink struct {
-		at  pt
-		box int
-	}
+}
+
+// arrowheads finds every arrowhead: each points into a box, and a line
+// arrives behind it.
+func (t *tracer) arrowheads() []sink {
+	r := t.r
 	var sinks []sink
 	for y := 0; y < r.g.H; y++ {
 		for x, c := range r.g.Cells[y] {
@@ -551,25 +581,30 @@ func (r *read) trace() {
 			if _, inBox := r.owner[p]; inBox {
 				continue
 			}
-			q, _, _ := next(p, a)
+			q, _, _ := t.next(p, a)
 			b, inBox := r.owner[q]
 			if !inBox {
 				r.fail("arrowhead at (%d,%d) points at no box", x, y)
 				continue
 			}
-			behind, _, _ := next(p, opposite(a))
-			if !accepts(behind, opposite(a)) {
+			behind, _, _ := t.next(p, opposite(a))
+			if !t.accepts(behind, opposite(a)) {
 				r.fail("arrowhead at (%d,%d) has no line behind it", x, y)
 			}
 			sinks = append(sinks, sink{p, b})
-			find(p)
+			t.find(p)
 		}
 	}
+	return sinks
+}
 
-	// Networks: each leaves one box and ends in arrowheads.
+// edges reads the networks: each leaves one box and ends in arrowheads,
+// an edge to each, drawn in the network's style.
+func (t *tracer) edges(sinks []sink) {
+	r := t.r
 	sources := map[pt]map[int]bool{}
 	for p := range r.port {
-		root := find(p)
+		root := t.find(p)
 		if sources[root] == nil {
 			sources[root] = map[int]bool{}
 		}
@@ -577,17 +612,17 @@ func (r *read) trace() {
 	}
 	ends := map[pt][]sink{}
 	for _, sk := range sinks {
-		ends[find(sk.at)] = append(ends[find(sk.at)], sk)
+		ends[t.find(sk.at)] = append(ends[t.find(sk.at)], sk)
 	}
 	roots := map[pt]bool{}
-	for p := range parent {
-		roots[find(p)] = true
+	for p := range t.parent {
+		roots[t.find(p)] = true
 	}
 	// A network's style is in the glyphs of its straight runs.
 	style := map[pt]string{}
-	for p := range parent {
+	for p := range t.parent {
 		if st, ok := styles[r.g.at(p.x, p.y).G]; ok && r.mask(p) != 0 {
-			root := find(p)
+			root := t.find(p)
 			if was, ok := style[root]; ok && was != st {
 				r.fail("a line at (%d,%d) is both %s and %s", p.x, p.y, was, st)
 			}
@@ -620,60 +655,68 @@ func (r *read) trace() {
 			r.edges = append(r.edges, Edge{From: src, To: sk.box, ArrowSGR: c.SGR, ArrowX: sk.at.x, ArrowY: sk.at.y, Style: st})
 		}
 	}
+}
 
-	// Labels: a label belongs to the one arrowhead its line leads to past
-	// it, away from the box the line leaves. The joins again, as a graph
-	// to cut at a label.
-	edgesOf := func() map[pt][]pt {
-		g := map[pt][]pt{}
-		add := func(a, b pt) { g[a] = append(g[a], b); g[b] = append(g[b], a) }
-		for y := 0; y < r.g.H; y++ {
-			for x := range r.g.Cells[y] {
-				p := pt{x, y}
-				if m := r.mask(p); m != 0 {
-					for _, d := range dirs {
-						if m&d.bit != 0 {
-							if q, _, _ := next(p, d.bit); accepts(q, d.bit) {
-								add(p, q)
-							}
+// joins are the joins between line cells, ports and arrowheads, as a
+// graph to cut at a label.
+func (t *tracer) joins() map[pt][]pt {
+	r := t.r
+	g := map[pt][]pt{}
+	add := func(a, b pt) { g[a] = append(g[a], b); g[b] = append(g[b], a) }
+	for y := 0; y < r.g.H; y++ {
+		for x := range r.g.Cells[y] {
+			p := pt{x, y}
+			if m := r.mask(p); m != 0 {
+				for _, d := range dirs {
+					if m&d.bit != 0 {
+						if q, _, _ := t.next(p, d.bit); t.accepts(q, d.bit) {
+							add(p, q)
 						}
 					}
 				}
 			}
 		}
-		for p, way := range r.port {
-			if q, _, _ := next(p, way); accepts(q, way) {
-				add(p, q)
-			}
-		}
-		return g
 	}
-	adj := edgesOf()
+	for p, way := range r.port {
+		if q, _, _ := t.next(p, way); t.accepts(q, way) {
+			add(p, q)
+		}
+	}
+	return g
+}
+
+// reach is what can be reached from start in adj without crossing the
+// joins cut.
+func reach(adj map[pt][]pt, start pt, cut map[[2]pt]bool) map[pt]bool {
+	seen := map[pt]bool{start: true}
+	stack := []pt{start}
+	for len(stack) > 0 {
+		p := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for _, q := range adj[p] {
+			if cut[[2]pt{p, q}] || cut[[2]pt{q, p}] || seen[q] {
+				continue
+			}
+			seen[q] = true
+			stack = append(stack, q)
+		}
+	}
+	return seen
+}
+
+// labels gives each label to the edge it is on: the one arrowhead its
+// line leads to past it, away from the box the line leaves.
+func (t *tracer) labels() {
+	r := t.r
+	adj := t.joins()
 	sinkAt := map[pt]int{}
 	for i, e := range r.edges {
 		sinkAt[pt{e.ArrowX, e.ArrowY}] = i
 	}
-	// reach is what can be reached from p without crossing the joins cut.
-	reach := func(start pt, cut map[[2]pt]bool) map[pt]bool {
-		seen := map[pt]bool{start: true}
-		stack := []pt{start}
-		for len(stack) > 0 {
-			p := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			for _, q := range adj[p] {
-				if cut[[2]pt{p, q}] || cut[[2]pt{q, p}] || seen[q] {
-					continue
-				}
-				seen[q] = true
-				stack = append(stack, q)
-			}
-		}
-		return seen
-	}
 	for li, l := range r.lbls {
 		cut := map[[2]pt]bool{}
 		var far []pt
-		if js := labelJoins[li]; len(js) > 0 {
+		if js := t.labelJoins[li]; len(js) > 0 {
 			for _, j := range js {
 				cut[[2]pt{j.a, j.b}] = true
 			}
@@ -691,11 +734,11 @@ func (r *read) trace() {
 				far = append(far, q)
 			}
 		}
-		// The side holding a box's port is the way back; the arrowheads
-		// on the other side are the label's.
+		// The side holding a box's port is the way back; the arrowheads on
+		// the other side are the label's.
 		var mine []int
 		for _, start := range far {
-			side := reach(start, cut)
+			side := reach(adj, start, cut)
 			hasPort := false
 			for p := range side {
 				if _, ok := r.port[p]; ok {
