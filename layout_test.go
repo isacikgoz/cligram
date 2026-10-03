@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/isacikgoz/cligram"
+	"github.com/isacikgoz/cligram/internal/reader"
 )
 
 // factory is the whole factory loop, written as ackt would: steps in the
@@ -230,11 +231,68 @@ func TestWaysOnStackBesideTheirStep(t *testing.T) {
 	})
 }
 
+// A further way on goes below what the one before it led to, where its
+// own way leads through the same columns, and no further.
 func TestASiblingClearsWhatTheOneBeforeItLedTo(t *testing.T) {
-	l := diagram("p", "a", "a2", "a3", "b", "p -> a", "a -> a2", "a -> a3", "p -> b").Layout()
+	// b2 is in a3's column: b's way goes below a3.
+	l := diagram("p", "a", "a2", "a3", "b", "b2", "p -> a", "a -> a2", "a -> a3", "p -> b", "b -> b2").Layout()
 	noWarnings(t, l)
 	if a3, b := rect(t, l, "a3"), rect(t, l, "b"); b.Y < a3.Y+a3.H+2 {
 		t.Errorf("b %+v is not below a's subtree, which reaches %+v", b, a3)
+	}
+
+	// b alone shares a column with a only: it goes right under a, level
+	// with a3 beyond.
+	l = diagram("p", "a", "a2", "a3", "b", "p -> a", "a -> a2", "a -> a3", "p -> b").Layout()
+	noWarnings(t, l)
+	if a, a3, b := rect(t, l, "a"), rect(t, l, "a3"), rect(t, l, "b"); b.Y != a3.Y || b.Y < a.Y+a.H+2 {
+		t.Errorf("b %+v is not under a %+v, level with a3 %+v", b, a, a3)
+	}
+
+	// A long way on that turns far off does not push the next one down
+	// past all of it.
+	l = diagram("p", "a", "x", "z", "z1", "z2", "z3", "b",
+		"p -> a", "a -> x", "x -> z", "z -> z1", "z -> z2", "z -> z3", "p -> b").Layout()
+	noWarnings(t, l)
+	if a, z3, b := rect(t, l, "a"), rect(t, l, "z3"), rect(t, l, "b"); b.Y >= z3.Y || b.Y < a.Y+a.H+2 {
+		t.Errorf("b %+v is not right under a %+v, above z3 %+v", b, a, z3)
+	}
+}
+
+// A loop's shortest way is a hook too short for a label: a labelled loop
+// goes round a corner of its box instead, and reads back as a loop with
+// its label, beside the flow either way and with the flow on both sides.
+func TestALoopKeepsItsLabel(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		d     *cligram.Diagram
+		opts  []cligram.LayoutOption
+		loops int
+	}{
+		{"after the flow", diagram("a", "b", "a -> b", "b -> b needs"), nil, 1},
+		{"in the flow", diagram("a", "b", "c", "a -> b", "b -> b a-rather-long-outcome", "b -> c"), nil, 1},
+		{"down", diagram("a", "b", "c", "a -> b", "b -> b retry", "b -> c yes"),
+			[]cligram.LayoutOption{cligram.WithOrientation(cligram.TopToBottom)}, 1},
+		{"two", diagram("a", "b", "c", "d", "a -> b", "b -> c", "b -> b retry", "c -> c no", "c -> d yes"), nil, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := tc.d.Layout(tc.opts...)
+			noWarnings(t, l)
+			text := l.Render(cligram.State{}, cligram.Plain)
+			pic, err := reader.Read(text)
+			if err != nil {
+				t.Fatalf("%v\n%s", err, text)
+			}
+			loops := 0
+			for _, e := range pic.Edges {
+				if e.From == e.To && e.Label != "" {
+					loops++
+				}
+			}
+			if loops != tc.loops {
+				t.Errorf("%d labelled loops read back, want %d:\n%s", loops, tc.loops, text)
+			}
+		})
 	}
 }
 
@@ -336,7 +394,7 @@ func TestRenderPaintsTheStateWithoutMovingABox(t *testing.T) {
 	}, cligram.Plain)
 	want := []string{
 		"╭─────╮    ╭─────╮",
-		"│ %s X ├───▸│ %s X │",
+		"│ %s X ├───►│ %s X │",
 		"╰─────╯    ╰─────╯",
 	}
 	if w := fmt.Sprintf(strings.Join(want, "\n"), " ", " "); idle != w {

@@ -101,7 +101,10 @@ type router struct {
 	// stretch for its label.
 	unbroken bool
 	// ports are the border cells edges leave through, by group.
-	ports  map[int]int
+	ports map[int]int
+	// off are the cells of labels off the grid, where no line goes but a
+	// loop's label may.
+	off    map[Point]bool
 	search search
 }
 
@@ -110,7 +113,7 @@ func newRouter(l *Layout, o Orientation) *router {
 	r := &router{l: l, orient: o, w: w, h: h,
 		box: make([]int, w*h), lines: make([]uint8, w*h), group: make([]int, w*h),
 		uses: make([]int, w*h), blocked: make([]bool, w*h), label: make([]bool, w*h), sole: make([]bool, w*h),
-		xlines: make([]uint8, w*h), xgroup: make([]int, w*h), ports: map[int]int{}}
+		xlines: make([]uint8, w*h), xgroup: make([]int, w*h), ports: map[int]int{}, off: map[Point]bool{}}
 	for i, p := range l.nodes {
 		b := r.grid(p.rect)
 		for y := b.Y; y < b.Y+b.H; y++ {
@@ -152,7 +155,15 @@ func routeAll(l *Layout, o Orientation, ell string, lim Limits) ([]route, []erro
 		a, b := l.nodes[l.index[e.From]].rect, l.nodes[l.index[e.To]].rect
 		return abs(2*a.X+a.W-2*b.X-b.W) + abs(2*a.Y+a.H-2*b.Y-b.H)
 	}
-	sort.SliceStable(order, func(a, b int) bool { return length(order[a]) < length(order[b]) })
+	// A labelled loop goes round a corner of its box, which takes sides
+	// the flow would rather have: it goes last, where there is room left.
+	last := func(i int) bool { return loop(l.edges[i]) && l.edges[i].Label != "" }
+	sort.SliceStable(order, func(a, b int) bool {
+		if la, lb := last(order[a]), last(order[b]); la != lb {
+			return lb
+		}
+		return length(order[a]) < length(order[b])
+	})
 
 	var best []route
 	var bestWarns []error
@@ -208,7 +219,11 @@ func (r *router) routeIn(routes []route, order []int) (failed []int, lost int, w
 		}
 		// The label goes on now, so edges routed after keep clear of it:
 		// one of the same group branches off before it, not under it.
-		rt.labelX, rt.labelY, rt.placed = r.placeLabel(cells, rt.label)
+		// A loop's shortest way is a hook with its arrowhead beside where
+		// it leaves: its label goes on a loop round a corner instead.
+		if !loop(rt.edge) {
+			rt.labelX, rt.labelY, rt.placed = r.placeLabel(cells, rt.label, false, false)
+		}
 		if !rt.placed {
 			// Sharing a trunk can leave a branch too short for its label:
 			// route the edge again on its own, and keep that if the label
@@ -217,10 +232,10 @@ func (r *router) routeIn(routes []route, order []int) (failed []int, lost int, w
 			// stretches a label needs.
 			after := r.save()
 			placed := false
-			for _, unbroken := range []bool{false, true} {
+			for _, try := range retries(rt.edge) {
 				r.restore(before)
-				r.unbroken = unbroken
-				alone, ok := r.find(rt.edge, -1-i)
+				r.unbroken = try.unbroken
+				alone, ok := r.find(try.edge, -1-i)
 				r.unbroken = false
 				if !ok {
 					continue
@@ -231,7 +246,7 @@ func (r *router) routeIn(routes []route, order []int) (failed []int, lost int, w
 				for _, c := range alone[1:] {
 					r.sole[c] = true
 				}
-				if x, y, ok := r.placeLabel(alone, rt.label); ok {
+				if x, y, ok := r.placeLabel(alone, rt.label, try.corners, rt.edge.From == rt.edge.To); ok {
 					rt.path, rt.labelX, rt.labelY, rt.placed = r.corners(alone), x, y, true
 					placed = true
 					break
@@ -248,12 +263,51 @@ func (r *router) routeIn(routes []route, order []int) (failed []int, lost int, w
 	return failed, lost, warns
 }
 
+// retry is a way to route an edge again, on its own, for its label.
+type retry struct {
+	edge     Edge
+	unbroken bool
+	// corners lets the label sit by its own line where it turns.
+	corners bool
+}
+
+// retries are the ways to route e again when its label found no room:
+// as it was, then without crossing lines, then with the label by a corner
+// of its own line, which reads less plainly. The shortest loop from a
+// node back to itself is a hook too short for a label, so a loop first
+// goes round a corner of its box, out one side and in the next, where one
+// leg is long enough to carry its label beside it; a loop's label is
+// always by its corners.
+func retries(e Edge) []retry {
+	if !loop(e) {
+		return []retry{{e, false, false}, {e, true, false}, {e, false, true}, {e, true, true}}
+	}
+	again := []retry{{e, false, true}, {e, true, true}}
+	var out []retry
+	for _, sides := range [][2]Side{
+		{Right, Bottom}, {Bottom, Right}, {Right, Top}, {Top, Right},
+		{Left, Bottom}, {Bottom, Left}, {Left, Top}, {Top, Left},
+	} {
+		round := e
+		round.FromSide, round.ToSide = sides[0], sides[1]
+		out = append(out, retry{round, false, true})
+	}
+	return append(out, again...)
+}
+
+// loop reports whether e goes from a node back to itself by whichever
+// sides the router finds best.
+func loop(e Edge) bool {
+	return e.From == e.To && e.FromSide == Auto && e.ToSide == Auto
+}
+
 // snapshot is the router's grid as it was, to go back to.
 type snapshot struct {
 	lines, xlines        []uint8
 	group, uses, xgroup  []int
 	blocked, label, sole []bool
 	ports                map[int]int
+	off                  map[Point]bool
 }
 
 func (r *router) save() *snapshot {
@@ -261,7 +315,7 @@ func (r *router) save() *snapshot {
 		lines: slices.Clone(r.lines), xlines: slices.Clone(r.xlines),
 		group: slices.Clone(r.group), uses: slices.Clone(r.uses), xgroup: slices.Clone(r.xgroup),
 		blocked: slices.Clone(r.blocked), label: slices.Clone(r.label), sole: slices.Clone(r.sole),
-		ports: maps.Clone(r.ports),
+		ports: maps.Clone(r.ports), off: maps.Clone(r.off),
 	}
 }
 
@@ -275,6 +329,7 @@ func (r *router) restore(s *snapshot) {
 	copy(r.label, s.label)
 	copy(r.sole, s.sole)
 	r.ports = maps.Clone(s.ports)
+	r.off = maps.Clone(s.off)
 }
 
 func abs(n int) int {
@@ -653,17 +708,14 @@ func (r *router) enter(prev, c, d, group int, split bool) (int, bool, bool) {
 			cost = costReuse
 		case m == (north|south|east|west)&^along:
 			// A crossing, of another group's line or a sibling branch. One
-			// beside a box is hard to tell from a junction or an
-			// arrowhead's line.
+			// near a box is hard to tell from a junction, or breaks the
+			// line just before its arrowhead.
 			cost += costCross
-			if r.nearBox(x, y) {
+			if r.nearBox(x, y, 2) {
 				cost += 3 * costCross // reads as a break in the line it crosses
 			}
 			if r.unbroken {
-				cost += costCross
-			}
-			if r.unbroken {
-				cost += 2 * costCross
+				cost += 3 * costCross
 			}
 			split = true
 		default:
@@ -732,10 +784,11 @@ func (r *router) linked(prev, c, d, group int) bool {
 	return from&dirBit(d) != 0
 }
 
-// nearBox reports whether a box is within a cell of (x, y), corners too.
-func (r *router) nearBox(x, y int) bool {
-	for ny := y - 1; ny <= y+1; ny++ {
-		for nx := x - 1; nx <= x+1; nx++ {
+// nearBox reports whether a box is within reach cells of (x, y), corners
+// too.
+func (r *router) nearBox(x, y, reach int) bool {
+	for ny := y - reach; ny <= y+reach; ny++ {
+		for nx := x - reach; nx <= x+reach; nx++ {
 			if r.in(nx, ny) && r.box[r.cellOf(nx, ny)] != 0 {
 				return true
 			}
@@ -818,9 +871,13 @@ func (r *router) corners(cells []int) []Point {
 
 // placeLabel finds where a label sits on its route: on the straight
 // stretch across nearest the target that only this edge uses, or else
-// astride such a stretch down. It returns the label's first cell, in grid cells, and
-// keeps the cells it covers for the label.
-func (r *router) placeLabel(cells []int, label string) (int, int, bool) {
+// astride such a stretch down, or beside one. It returns the label's
+// first cell, in grid cells, and keeps the cells it covers for the label.
+// With corners, it may sit by its own line where it turns. With outside,
+// it may reach off the grid, where no line goes: for a loop, whose label
+// is by its own box; another edge's label there would bar the way round
+// the picture to the edges routed after it.
+func (r *router) placeLabel(cells []int, label string, corners, outside bool) (int, int, bool) {
 	g := r.l.glyphs
 	lw := textWidth(g.LabelOpen) + textWidth(label) + textWidth(g.LabelClose)
 	own := func(c int, m uint8) bool { return r.uses[c] == 1 && r.lines[c] == m && !r.blocked[c] }
@@ -867,21 +924,30 @@ func (r *router) placeLabel(cells []int, label string) (int, int, bool) {
 		r.keep(x, y, lw, labelPadding)
 		return x, y, true
 	}
+	// A label across a stretch down sits on one of its rows: the middle
+	// one if it is clear, else the next clear one out from the middle.
 	astride := func(s stretch) (int, int, bool) {
-		mid := cells[s.from+s.n/2]
-		x, y := mid%r.w-lw/2, mid/r.w
-		// The label and a cell each side of it, clear of everything but
-		// its own line.
-		for k := -labelPadding; k < lw+labelPadding; k++ {
-			if !r.in(x+k, y) {
-				return 0, 0, false
+	rows:
+		for _, i := range fromMiddle(s.n, labelPadding) {
+			at := cells[s.from+i]
+			x, y := at%r.w-lw/2, at/r.w
+			// The label and a cell each side of it, clear of everything but
+			// its own line.
+			for k := -labelPadding; k < lw+labelPadding; k++ {
+				if !r.in(x+k, y) {
+					if !outside || r.off[Point{x + k, y}] {
+						continue rows
+					}
+					continue
+				}
+				c := r.cellOf(x+k, y)
+				if c != at && (r.box[c] != 0 || r.lines[c] != 0 || r.blocked[c]) {
+					continue rows
+				}
 			}
-			c := r.cellOf(x+k, y)
-			if c != mid && (r.box[c] != 0 || r.lines[c] != 0 || r.blocked[c]) {
-				return 0, 0, false
-			}
+			return x, y, true
 		}
-		return x, y, true
+		return 0, 0, false
 	}
 	if s, ok := last(runs(north|south, r.w), func(s stretch) bool {
 		_, _, ok := astride(s)
@@ -901,11 +967,23 @@ func (r *router) placeLabel(cells []int, label string) (int, int, bool) {
 		for _, c := range stretch {
 			mine[c] = true
 		}
+		// By a corner, its own line comes round next to the label: the
+		// same edge either way. Not where another edge shares or crosses
+		// it.
+		for _, c := range cells {
+			if corners && r.uses[c] == 1 && r.xlines[c] == 0 {
+				mine[c] = true
+			}
+		}
 		var ring []int
 		for yy := y - 1; yy <= y+1; yy++ {
 			for xx := x - 2; xx < x+lw+2; xx++ {
+				// Off the grid no line goes, only another label.
 				if !r.in(xx, yy) {
-					return false
+					if !outside || r.off[Point{xx, yy}] {
+						return false
+					}
+					continue
 				}
 				c := r.cellOf(xx, yy)
 				onLabel := yy == y && xx >= x-labelPadding && xx < x+lw+labelPadding
@@ -934,11 +1012,13 @@ func (r *router) placeLabel(cells []int, label string) (int, int, bool) {
 	vertical, across := runs(north|south, r.w), runs(east|west, 1)
 	for i := len(vertical) - 1; i >= 0; i-- {
 		v := vertical[i]
-		mid := cells[v.from+v.n/2]
-		lx, ly := mid%r.w, mid/r.w
-		for _, x := range []int{lx + 1 + labelPadding, lx - labelPadding - lw} {
-			if claim(x, ly, cells[v.from:v.from+v.n], v.n/2) {
-				return x, ly, true
+		for _, k := range fromMiddle(v.n, 0) {
+			at := cells[v.from+k]
+			lx, ly := at%r.w, at/r.w
+			for _, x := range []int{lx + 1 + labelPadding, lx - labelPadding - lw} {
+				if claim(x, ly, cells[v.from:v.from+v.n], k) {
+					return x, ly, true
+				}
 			}
 		}
 	}
@@ -957,10 +1037,33 @@ func (r *router) placeLabel(cells []int, label string) (int, int, bool) {
 	return 0, 0, false
 }
 
+// fromMiddle lists the places along a stretch of n cells, keeping margin
+// cells clear at each end, from its middle outward: n/2, then one before,
+// one after, and so on.
+func fromMiddle(n, margin int) []int {
+	var out []int
+	add := func(i int) {
+		if i >= margin && i < n-margin {
+			out = append(out, i)
+		}
+	}
+	mid := n / 2
+	add(mid)
+	for d := 1; d <= mid; d++ {
+		add(mid - d)
+		add(mid + d)
+	}
+	return out
+}
+
 // keep keeps the cells of a label from everything else, and pad cells of
 // its own line each side of it.
 func (r *router) keep(x, y, w, pad int) {
 	for k := -pad; k < w+pad; k++ {
+		if !r.in(x+k, y) {
+			r.off[Point{x + k, y}] = true
+			continue
+		}
 		c := r.cellOf(x+k, y)
 		r.blocked[c] = true
 		r.label[c] = k >= 0 && k < w

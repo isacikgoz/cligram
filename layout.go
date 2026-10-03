@@ -3,6 +3,7 @@ package cligram
 import (
 	"fmt"
 	"maps"
+	"slices"
 )
 
 // Orientation is the way a flow reads: each step's ways on go that way
@@ -155,19 +156,19 @@ func (d *Diagram) Layout(opts ...LayoutOption) *Layout {
 }
 
 // placeAndRoute places the nodes and routes the edges. An edge with no way
-// through is most often walled in where it ends, so its two nodes are
-// given room all round and everything is laid out again, a few times,
-// keeping the layout that drew the most.
+// through, or no room for its label, is most often hemmed in where it
+// ends, so its two nodes are given room all round and everything is laid
+// out again, a few times, keeping the layout that drew the most.
 func (d *Diagram) placeAndRoute(cfg layoutConfig) *Layout {
 	l := d.place(cfg)
 	l.route(cfg)
 	pad := map[string]int{}
 	for range roomAttempts {
-		if l.lost() < 1000 {
+		if l.lost() == 0 {
 			break
 		}
 		for _, rt := range l.routes {
-			if rt.path == nil {
+			if rt.path == nil || (rt.label != "" && !rt.placed) {
 				pad[rt.edge.From] += roomPad
 				pad[rt.edge.To] += roomPad
 			}
@@ -337,6 +338,16 @@ type layouter struct {
 	dir    []int
 	band   []int
 	parent []int
+	// stacks are the further ways on auto stacks below the ones before.
+	stacks []stack
+}
+
+// stack is a further way on, c, to go below what the way before it led
+// to, prev, where the two share columns: sub is what c leads to, c too.
+type stack struct {
+	c         int
+	prev, sub []int
+	g         int
 }
 
 // gap is gapCells, with default gaps tight when the layout is compact.
@@ -407,7 +418,56 @@ func floorDiv(a, b int) int {
 func (y *layouter) run() {
 	y.placements()
 	y.auto()
+	y.stack()
 	y.solve()
+}
+
+// stack puts each further way on below what the way before it led to,
+// but only below what reaches into the columns its own way leads through
+// (rows, top to bottom): a long way on that turns far off does not push
+// the next one down past all of it. Where the flow goes along the main
+// axis is settled first; it does not depend on how siblings stack.
+//
+// Edges between the two ways run in the gap between them, so it keeps a
+// lane for each, and room for its label.
+func (y *layouter) stack() {
+	if len(y.stacks) == 0 {
+		return
+	}
+	pos := y.peek(y.main)
+	gap := y.gap(Gap{}, y.main)
+	for _, st := range y.stacks {
+		lo, hi := 1<<30, -1<<30
+		for _, n := range st.sub {
+			lo, hi = min(lo, pos[n]), max(hi, pos[n]+y.size(n, y.main))
+		}
+		across := y.gap(Gap{}, y.cross) + y.lanes(st.prev, st.sub)
+		for _, t := range st.prev {
+			if pos[t] < hi+gap && pos[t]+y.size(t, y.main)+gap > lo {
+				y.sys[y.cross].floor(t, st.c, y.size(t, y.cross)+across, st.g, prioAuto)
+			}
+		}
+	}
+}
+
+// lanes is the room across the flow that the edges between nodes in a
+// and nodes in b take: a line and a cell beside it each, or its label's
+// room.
+func (y *layouter) lanes(a, b []int) int {
+	in := func(s []int, id string) bool { return slices.Contains(s, y.l.index[id]) }
+	room := 0
+	for _, e := range y.l.edges {
+		between := in(a, e.From) && in(b, e.To) || in(b, e.From) && in(a, e.To)
+		if e.From == e.To || !between {
+			continue
+		}
+		if e.Label != "" {
+			room += y.labelGap(e.Label, y.cross)
+		} else {
+			room += 2
+		}
+	}
+	return room
 }
 
 // placements turns what the author wrote into constraints.
@@ -622,18 +682,21 @@ func (y *layouter) auto() {
 				}
 				y.beside[c] = true
 			}
+			stacked := -1
 			if y.free(c, y.cross) {
 				if prev == nil {
 					y.center(c, y.cross, []int{i}, g)
 				} else {
-					for _, t := range prev {
-						y.sys[y.cross].floor(t, c, y.size(t, y.cross)+y.gap(Gap{}, y.cross), g, prioAuto)
-					}
+					stacked = len(y.stacks)
+					y.stacks = append(y.stacks, stack{c: c, prev: prev, g: g})
 				}
 			}
 			start := len(order)
 			visit(c)
 			prev = append([]int(nil), order[start:]...)
+			if stacked >= 0 {
+				y.stacks[stacked].sub = prev
+			}
 		}
 	}
 
@@ -724,6 +787,17 @@ func (y *layouter) solve() {
 }
 
 // solveAxis solves one axis, raising the soft bounds until they settle.
+// peek is where the nodes would go on ax as things stand, leaving the
+// system as it was: what it would drop is dropped and warned of when it
+// is solved for real.
+func (y *layouter) peek(ax axis) []int {
+	s := y.sys[ax]
+	was := maps.Clone(s.dropped)
+	pos, _ := s.solve()
+	s.dropped = was
+	return pos
+}
+
 func (y *layouter) solveAxis(ax axis) []int {
 	s := y.sys[ax]
 	var pos []int

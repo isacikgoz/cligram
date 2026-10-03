@@ -112,7 +112,7 @@ var lines = map[string]uint8{
 }
 
 // arrows are the arrowheads, by the way they point.
-var arrows = map[string]uint8{"▴": n, "▸": e, "▾": s, "◂": w}
+var arrows = map[string]uint8{"▲": n, "►": e, "▼": s, "◄": w}
 
 // family is how one kind of box is drawn.
 type family struct {

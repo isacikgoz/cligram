@@ -101,8 +101,8 @@ func TestABrokenPictureSaysWhatIsWrong(t *testing.T) {
 			return set(good, x, y+1, " ")
 		}, "leads"},
 		{"an arrowhead the wrong way", func(t *testing.T) string {
-			x, y := cellAt(t, good, "▸")
-			return set(good, x, y, "◂")
+			x, y := cellAt(t, good, "►")
+			return set(good, x, y, "◄")
 		}, "arrowhead"},
 		{"a broken border", func(t *testing.T) string {
 			x, y := cellAt(t, good, "╔")
@@ -115,7 +115,7 @@ func TestABrokenPictureSaysWhatIsWrong(t *testing.T) {
 			return good + "\n\n          [ lost ]"
 		}, "on no line"},
 		{"a line from nowhere", func(t *testing.T) string {
-			return good + "\n\n  ────▸"
+			return good + "\n\n  ────►"
 		}, "leads"},
 		{"two boxes' lines joined", func(t *testing.T) string {
 			// A box whose line runs into another's trunk.
@@ -136,10 +136,10 @@ func TestALabelOnASharedTrunkIsAmbiguous(t *testing.T) {
 	// One box, a trunk with the label on it, branching to two boxes.
 	text := strings.Join([]string{
 		"╭───╮              ╭───╮",
-		"│   ├──[ x ]──┬───▸│   │",
+		"│   ├──[ x ]──┬───►│   │",
 		"╰───╯         │    ╰───╯",
 		"              │    ╭───╮",
-		"              └───▸│   │",
+		"              └───►│   │",
 		"                   ╰───╯",
 	}, "\n")
 	if _, err := reader.Read(text); err == nil || !strings.Contains(err.Error(), "2 edges share") {
@@ -150,7 +150,7 @@ func TestALabelOnASharedTrunkIsAmbiguous(t *testing.T) {
 func TestALineLeavingTwoBoxesIsAmbiguous(t *testing.T) {
 	text := strings.Join([]string{
 		"╭───╮     ╭───╮",
-		"│   ├──┬─▸│   │",
+		"│   ├──┬─►│   │",
 		"╰───╯  │  ╰───╯",
 		"╭───╮  │",
 		"│   ├──┘",
@@ -168,9 +168,9 @@ func TestACrossingIsPassedUnder(t *testing.T) {
 		"       │   b │",
 		"       ╰──┬──╯",
 		"╭─────╮   │    ╭─────╮",
-		"│   a ├───│───▸│   d │",
+		"│   a ├───│───►│   d │",
 		"╰─────╯   │    ╰─────╯",
-		"          ▾",
+		"          ▼",
 		"       ╭─────╮",
 		"       │   c │",
 		"       ╰─────╯",

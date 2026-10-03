@@ -47,12 +47,12 @@ fmt.Println(l.Render(cligram.State{         // as often as the run moves
 
 ```
 ╭──────────╮    ╔══════════════════╗              ╭───────────╮
-│ ✓ Triage ├───▸║ ▸ Ready to ship? ╟─┬─[ yes ]───▸│   Ship it │
+│ ✓ Triage ├───►║ ▸ Ready to ship? ╟─┬─[ yes ]───►│   Ship it │
 ╰──────────╯    ╚══════════════════╝ │            ╰───────────╯
-                                  ▴  │
+                                  ▲  │
                                   │  │
                                   │  │            ╭──────────╮
-                                  │  └───[ no ]──▸│   Fix it │
+                                  │  └───[ no ]──►│   Fix it │
                                   │               ╰┬─────────╯
                                   └────────────────┘
 ```
@@ -236,8 +236,11 @@ Rules the harness forced, all in route.go:
   to the target.
 - A path never passes its target's landing cells, nor its own cells.
 - Edges that find no way through are routed first and everything again;
-  if still walled in, their nodes get room all round and are laid out
-  again. Boxes keep a cell apart unless a placement says `gap: none`.
+  if still walled in, or a label still has no room, their nodes get room
+  all round and are laid out again. Boxes keep a cell apart unless a
+  placement says `gap: none`.
+- A labelled loop is routed last, round a corner of its box: the hook
+  that is its shortest way has no stretch long enough for a label.
 
 ### The pixel checks: drawings as a terminal shows them
 

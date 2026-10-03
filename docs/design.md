@@ -40,7 +40,12 @@ and updated live while a run moves through them.
    and running along a box's side or beside another line. Edges from one
    node share a way out and branch off one trunk. Each label goes on the
    straight stretch nearest its target that only its edge uses, else across
-   a vertical stretch, else beside its line. Every drawing must be
+   a vertical stretch, else beside its line, as near each stretch's middle
+   as is clear. A label with no room gets its edge routed again on its
+   own, then its nodes more room. A labelled loop goes last and round a
+   corner of its box, since its shortest way is a hook too short for a
+   label; its label may reach past the grid, which no other label may,
+   as it would bar the way round the picture. Every drawing must be
    readable from its glyphs alone, which `internal/reader` checks on
    random diagrams: split branches only cross, never rejoin; edges that
    cannot be routed go first on a fresh attempt, then get their nodes
@@ -131,9 +136,9 @@ for the 19-step factory loop.
   The router avoids crossings where it can.
 - A drawn diamond costs about five rows; a decision is a double-bordered
   box instead.
-- Glyphs like `▶` are ambiguous-width or turn into emoji in some
-  terminals. Arrowheads are `▸ ▴ ▾ ◂` and markers `▸ ✓ ✗ ◔`, all narrow
-  everywhere; box drawing is ambiguous-width too, so there is an ASCII
-  glyph set.
+- Glyphs like `▶` turn into emoji in some terminals. Arrowheads are
+  `► ▲ ▼ ◄`, which never do, and are large enough to see in common fonts
+  (the small `▸ ▴ ▾ ◂` are a few pixels). Markers are `▸ ✓ ✗ ◔`. `▲ ▼`
+  are ambiguous-width like box drawing, so there is an ASCII glyph set.
 - Every box keeps a cell for its status marker whatever the status, so a
   box never changes size as a run moves through it.

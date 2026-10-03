@@ -3,8 +3,9 @@ package cligram
 // Every glyph here is one cell wide. Box drawing characters are East Asian
 // "ambiguous" width, which no terminal draws two cells wide unless told
 // to; for one that is, ASCII is the fallback. The arrowheads and markers
-// are chosen from glyphs that are narrow everywhere and are never drawn as
-// emoji: ▸ rather than ▶, which some terminals turn into an emoji.
+// are chosen from glyphs that are never drawn as emoji: ► rather than ▶,
+// which some terminals turn into an emoji. The arrowheads are the large
+// triangles, as the small ones (▸) are a few pixels in common fonts.
 
 // Line directions, as bits: a cell's lines are the directions they leave it in.
 const (
@@ -61,7 +62,7 @@ var Unicode = &Glyphs{
 		east | south | west:         "┬",
 		north | east | south | west: "┼",
 	},
-	Arrows: [4]string{"▴", "▸", "▾", "◂"},
+	Arrows: [4]string{"▲", "►", "▼", "◄"},
 	Boxes: map[Kind]Borders{
 		Step: {
 			TopLeft: "╭", TopRight: "╮", BottomLeft: "╰", BottomRight: "╯",

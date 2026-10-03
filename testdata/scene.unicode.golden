@@ -1,13 +1,13 @@
 ┏━━━━━━━━━━━━━━━━━━━━━┓    ╭──────────────╮    ╔═══════════╗                      ╭──────────────╮
-┃ ✓ New task or issue ┠───▸│ ✓ Triage     ├───▸║ ✓ Triage  ╟───[ Automat-able ]──▸│ ▸ Implement  │
+┃ ✓ New task or issue ┠───►│ ✓ Triage     ├───►║ ✓ Triage  ╟───[ Automat-able ]──►│ ▸ Implement  │
 ┗━━━━━━━━━━━━━━━━━━━━━┛    │   agent runs │    ║   outcome ║                      │   agent runs │
                            ╰──────────────╯    ╚═════╤═════╝                      ╰──────────────╯
-                                  ▴                  │
+                                  ▲                  │
                                   │                  │                            ╭───────────────╮
-                                  │                  ├───[ Needs human ]─────────▸│   Human input │
+                                  │                  ├───[ Needs human ]─────────►│   Human input │
                                   │                  │                            ╰───────┬───────╯
                                   └───────────────────────────────────────────────────────┘
                                                      │                            ╭────────╮
-                                                     └───[ Park for now ]────────▸│   Park │╮
+                                                     └───[ Park for now ]────────►│   Park │╮
                                                                                   ╰────────╯│
                                                                                    ╰────────╯
