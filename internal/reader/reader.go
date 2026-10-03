@@ -107,7 +107,7 @@ func opposite(b uint8) uint8 {
 // lines are the line glyphs and the ways they lead.
 var lines = map[string]uint8{
 	"│": n | s, "─": e | w,
-	"┆": n | s, "┄": e | w, // dashed
+	"┊": n | s, "┄": e | w, // dashed
 	"┃": n | s, "━": e | w, // thick
 	"└": n | e, "┘": n | w, "┌": e | s, "┐": s | w,
 	"├": n | e | s, "┤": n | s | w, "┬": e | s | w, "┴": n | e | w, "┼": n | e | s | w,
@@ -115,7 +115,7 @@ var lines = map[string]uint8{
 
 // styles are the glyphs that show a line's style; a line with none of
 // them is solid.
-var styles = map[string]string{"┆": "dashed", "┄": "dashed", "┃": "thick", "━": "thick"}
+var styles = map[string]string{"┊": "dashed", "┄": "dashed", "┃": "thick", "━": "thick"}
 
 // arrows are the arrowheads, by the way they point.
 var arrows = map[string]uint8{"▲": n, "►": e, "▼": s, "◄": w}

@@ -140,7 +140,7 @@ for the 19-step factory loop.
   `► ▲ ▼ ◄`, which never do, and are large enough to see in common fonts
   (the small `▸ ▴ ▾ ◂` are a few pixels). Markers are `▸ ✓ ✗ ◔`. `▲ ▼`
   are ambiguous-width like box drawing, so there is an ASCII glyph set.
-- Dashed (`┄ ┆`) and thick (`━ ┃`) edges show their style on straight
+- Dashed (`┄ ┊`, the four-dash vertical: three dashes read as solid in common fonts) and thick (`━ ┃`) edges show their style on straight
   runs only; corners and junctions stay light, since heavy corners are an
   end box's. Edges of different styles from one node never share a trunk,
   or the dashed one would show no dashes.

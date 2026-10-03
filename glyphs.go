@@ -68,7 +68,7 @@ var Unicode = &Glyphs{
 		east | south | west:         "┬",
 		north | east | south | west: "┼",
 	},
-	Dashed: [2]string{"┄", "┆"},
+	Dashed: [2]string{"┄", "┊"},
 	Thick:  [2]string{"━", "┃"},
 	Arrows: [4]string{"▲", "►", "▼", "◄"},
 	Boxes: map[Kind]Borders{

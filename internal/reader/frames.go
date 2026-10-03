@@ -17,7 +17,7 @@ func (f Frame) Contains(x, y int) bool {
 // Where a line crosses a frame's border, the border cell shows the line,
 // straight across: these are the lines that may.
 var (
-	crossDown   = map[string]bool{"│": true, "┆": true, "┃": true}
+	crossDown   = map[string]bool{"│": true, "┊": true, "┃": true}
 	crossAcross = map[string]bool{"─": true, "┄": true, "━": true}
 )
 
