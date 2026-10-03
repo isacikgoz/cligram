@@ -2,10 +2,15 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"io"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // blocks are the README's fenced blocks of language lang, in order.
@@ -83,7 +88,11 @@ func TestTheCommandSaysWhatIsWrong(t *testing.T) {
 		code int
 		says string
 	}{
-		{nil, "", 2, "usage: cligram"},
+		{[]string{"a.yaml", "b.yaml"}, "", 2, "usage: cligram"},
+		{nil, "", 1, "the document is empty"},
+		{[]string{"-format", "dot", "-"}, "nodes: {a: A}\n", 1, "format is auto, yaml or mermaid"},
+		{[]string{"-"}, "flowchart LR\na ~~> b\n", 1, "line 2: expected a link"},
+		{[]string{"-"}, "graph: what\n", 1, "a Mermaid flowchart starts with"},
 		{[]string{"missing.yaml"}, "", 1, "no such file"},
 		{[]string{"-"}, "nodes: {a: A}\nedges: [a -> ghost]\n", 1, `"ghost" is not a node`},
 		{[]string{"-color", "always", "-"}, "nodes: {a: A}\n", 0, ""},
@@ -114,5 +123,115 @@ func TestASCIIDrawsWithASCIIOnly(t *testing.T) {
 		if r > 127 {
 			t.Fatalf("%q in %q", r, out.String())
 		}
+	}
+}
+
+// The README's agent example pipes a flowchart in: what it shows is what
+// the command draws from it.
+func TestTheReadmeMermaidExampleIsWhatItDraws(t *testing.T) {
+	md := readme(t)
+	m := regexp.MustCompile("(?s)```sh\ncligram -width 80 <<'EOF'\n(.*?)EOF\n```").FindStringSubmatch(md)
+	if m == nil {
+		t.Fatal("the README does not pipe a flowchart in")
+	}
+	var out, errs bytes.Buffer
+	if code := run([]string{"-width", "80"}, strings.NewReader(m[1]), &out, &errs); code != 0 || errs.Len() > 0 {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if text := blocks(t, md, "text"); len(text) < 3 || text[2] != out.String() {
+		t.Errorf("the README's Mermaid drawing is not what the command draws:\n%s", out.String())
+	}
+}
+
+func TestMermaidComesInOnStdin(t *testing.T) {
+	var out, errs bytes.Buffer
+	in := "flowchart LR\n  a[Plan] --> b{Ready?}\n  b -->|yes| c([Ship])\n  b -->|no| a\n"
+	if code := run(nil, strings.NewReader(in), &out, &errs); code != 0 {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	for _, want := range []string{"Plan", "Ready?", "Ship", "[ yes ]", "[ no ]", "╔", "┏"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("no %q in:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestJSONIsForProgramsToRead(t *testing.T) {
+	var out, errs bytes.Buffer
+	in := "flowchart LR\n  a --> b\n  a -->|a label far too long to fit in any gap at all| b\n"
+	if code := run([]string{"-json", "-width", "40", "-"}, strings.NewReader(in), &out, &errs); code != 0 {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	var got struct {
+		Drawing       string
+		Width, Height int
+		Fits          bool
+		Format        string
+		Warnings      []string
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("%v:\n%s", err, out.String())
+	}
+	if got.Format != "mermaid" || got.Width == 0 || !strings.Contains(got.Drawing, "a") || got.Warnings == nil {
+		t.Errorf("%+v", got)
+	}
+	if strings.Contains(out.String(), "\x1b[") || errs.Len() != 0 {
+		t.Errorf("JSON carries no colors and says its warnings itself: %q %q", out.String(), errs.String())
+	}
+}
+
+func TestTheMCPServerDraws(t *testing.T) {
+	clientIn, serverOut := io.Pipe()
+	serverIn, clientOut := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- serveMCP(serverIn, serverOut) }()
+
+	ctx := context.Background()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+	session, err := client.Connect(ctx, &mcp.IOTransport{Reader: clientIn, Writer: clientOut}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil || len(tools.Tools) != 1 || tools.Tools[0].Name != "draw" {
+		t.Fatalf("tools %+v, %v", tools, err)
+	}
+	if !strings.Contains(tools.Tools[0].Description, "Mermaid") {
+		t.Errorf("the description does not say how to write a diagram")
+	}
+	text := func(r *mcp.CallToolResult) string {
+		var b strings.Builder
+		for _, c := range r.Content {
+			if tc, ok := c.(*mcp.TextContent); ok {
+				b.WriteString(tc.Text)
+			}
+		}
+		return b.String()
+	}
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "draw", Arguments: map[string]any{
+		"source": "flowchart LR\n  a[Plan] --> b{Ready?}\n  b -->|yes| c([Ship])",
+	}})
+	if err != nil || res.IsError {
+		t.Fatalf("%v %+v", err, res)
+	}
+	if got := text(res); !strings.Contains(got, "Ready?") || !strings.Contains(got, "[ yes ]") {
+		t.Errorf("drawing:\n%s", got)
+	}
+	if res.StructuredContent == nil {
+		t.Error("no structured result")
+	}
+
+	res, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "draw", Arguments: map[string]any{
+		"source": "flowchart LR\n  a ~~> b",
+	}})
+	if err != nil || !res.IsError || !strings.Contains(text(res), "line 2") {
+		t.Errorf("a mistake in the diagram: %v %+v", err, res)
+	}
+
+	_ = session.Close()
+	_ = clientOut.Close()
+	if err := <-done; err != nil {
+		t.Logf("server ended: %v", err)
 	}
 }

@@ -10,8 +10,17 @@ relative placement when you want to say where things go.
   Its only dependency is `rivo/uniseg` (text width).
 - `github.com/isacikgoz/cligram/bubble`: a Bubble Tea component on top.
 - `github.com/isacikgoz/cligram/yaml`: reads a diagram from YAML, with
-  errors that give a line; `cmd/cligram` draws a YAML file in the
-  terminal. The README's examples are checked by `cmd/cligram`'s tests.
+  errors that give a line.
+- `github.com/isacikgoz/cligram/mermaid`: reads a Mermaid flowchart
+  (`flowchart`/`graph`, any direction). Shapes map to kinds (`{}` decision,
+  `([])` and `(())` end, the rest steps); styles, `click` and subgraph
+  frames are read and left out.
+- `cmd/cligram`: draws Mermaid or YAML from a file or stdin. `-json` writes
+  the drawing, size, fit and warnings; `cligram mcp` serves a `draw` tool
+  over MCP on stdio. The README's examples are checked by its tests.
+- `.claude/skills/cligram/SKILL.md`: the skill that tells an agent when to
+  draw and how. Keep it in step with the command and the `draw` tool's
+  description in `cmd/cligram/mcp.go`.
 - `docs/design.md`: every design decision and why. Read it before changing
   behaviour.
 - `examples/live`: the factory loop with a pretend run. `go run ./examples/live`.

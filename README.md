@@ -1,6 +1,6 @@
 # cligram
 
-Flow diagrams for the terminal, from YAML or Go. Like Mermaid, but drawn in
+Flow diagrams for the terminal, from Mermaid, YAML or Go. Drawn in
 text: boxes, decisions and labelled edges, laid out to fit your terminal,
 and repainted live as a run moves through them.
 
@@ -91,6 +91,40 @@ fmt.Println(l.Render(cligram.State{
 Lay out once per size, then repaint as often as the run moves: a box never
 moves when its state changes. Use `cligram.ANSI`, or a `Palette` of your
 own colors, instead of `cligram.Plain` for color.
+
+## For agents
+
+An agent already writes Mermaid; cligram shows it. Pipe a flowchart in:
+
+```sh
+cligram -width 80 <<'EOF'
+flowchart LR
+  task([Task]) --> plan[Plan] --> act[Run tools]
+  act --> check{Done?}
+  check -->|no| plan
+  check -->|yes| done([Answer])
+EOF
+```
+
+```text
+                ┌───[ no ]────────────────────┐
+                ▾                             │
+┏━━━━━━━━┓  ╭────────╮  ╭─────────────╮  ╔════╧════╗              ┏━━━━━━━━━━┓
+┃   Task ┠─▸│   Plan ├─▸│   Run tools ├─▸║   Done? ╟───[ yes ]───▸┃   Answer ┃
+┗━━━━━━━━┛  ╰────────╯  ╰─────────────╯  ╚═════════╝              ┗━━━━━━━━━━┛
+```
+
+`[text]` is a step, `{text}` a decision, `([text])` an end, `-->|label|`
+labels an edge; the rest of Mermaid's flowchart syntax is read, and what
+cligram does not draw (styles, subgraph frames) is left out.
+
+- **A skill**: `npx skills add isacikgoz/cligram` teaches Claude Code and
+  other agents when to draw and how ([SKILL.md](.claude/skills/cligram/SKILL.md)).
+- **An MCP server**: `claude mcp add cligram -- cligram mcp` gives an agent
+  a `draw` tool, which returns the drawing and what to fix when something
+  did not fit.
+- **JSON**: `cligram -json` writes the drawing, its size, whether it fits
+  and its warnings, for a program to check.
 
 ## More
 
