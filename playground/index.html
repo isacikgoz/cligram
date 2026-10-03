@@ -5,14 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>cligram playground</title>
 <meta name="description" content="Paste a Mermaid flowchart and see it drawn as text, the way cligram draws it in a terminal.">
+<script>
+  // The theme picked last time, before the first paint.
+  try { const t = localStorage.getItem("cligram-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
 <style>
-/* Layout: a toolbar, then the source on the left and the terminal it is
-   drawn in on the right; stacked on a phone. The terminal is always dark,
-   as terminals are; the chrome around it follows the viewer's theme. */
+/* Layout: a header of the name and its icon buttons, then the source on
+   the left and the terminal it is drawn in on the right; stacked on a
+   phone. Drawing options live in a settings dialog. Everything, the
+   terminal too, follows the theme: the system's, or the one picked. */
 :root {
   --bg: #f5f7f7;
   --panel: #ffffff;
@@ -23,8 +28,8 @@
   --accent-fg: #ffffff;
   --bad: #b3261e;
   --warn: #8a5a00;
-  --term: #0f1416;
-  --term-fg: #d8e1e3;
+  --term: #fbfcfc;
+  --term-fg: #182224;
   --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   color-scheme: light;
@@ -33,12 +38,14 @@
   :root:not([data-theme="light"]) {
     --bg: #0b1011; --panel: #121a1c; --fg: #dbe5e6; --muted: #8a9b9e; --line: #233033;
     --accent: #3cc6c1; --accent-fg: #062221; --bad: #ff8a80; --warn: #e2b04a;
+    --term: #0f1416; --term-fg: #d8e1e3;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0b1011; --panel: #121a1c; --fg: #dbe5e6; --muted: #8a9b9e; --line: #233033;
   --accent: #3cc6c1; --accent-fg: #062221; --bad: #ff8a80; --warn: #e2b04a;
+  --term: #0f1416; --term-fg: #d8e1e3;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -47,29 +54,47 @@ body {
   margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 var(--sans);
   display: flex; flex-direction: column; padding-inline: 16px; padding-block: 12px 16px; gap: 12px;
 }
-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
+header { display: flex; align-items: center; gap: 12px; }
 h1 { font: 600 18px/1.2 var(--mono); margin: 0; letter-spacing: -0.01em; }
 h1 span { color: var(--accent); }
-header p { margin: 0; color: var(--muted); flex: 1 1 280px; min-width: 0; }
-header a { color: var(--accent); }
-.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
-.bar label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.icons { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.icon {
+  position: relative; display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 0;
+  border-radius: 8px; border: 1px solid transparent; background: none; color: var(--muted); cursor: pointer;
+}
+.icon:hover { color: var(--fg); border-color: var(--line); background: var(--panel); }
+.icon svg { width: 20px; height: 20px; fill: currentColor; }
+.icon .stroke { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.icon .sun { display: none; }
+.dark .icon .sun { display: block; }
+.dark .icon .moon { display: none; }
+/* A dot on the settings icon while any option differs from its default. */
+.icon .dot {
+  position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 2px var(--bg);
+}
 select, button {
   font: 500 13px var(--sans); color: var(--fg); background: var(--panel);
-  border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; cursor: pointer;
 }
-button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
-select:focus-visible, button:focus-visible, textarea:focus-visible, input:focus-visible {
+select {
+  appearance: none; padding: 5px 30px 5px 10px; border-radius: 8px;
+  background: var(--panel) no-repeat right 9px center / 12px 12px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' fill='none' stroke='%23889a9d' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+select:hover { border-color: var(--muted); }
+select:focus-visible, button:focus-visible, textarea:focus-visible, input:focus-visible, a:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
-.grow { flex: 1; }
 main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(260px, 2fr) 3fr; gap: 12px; }
 .pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
-.pane h2 {
-  margin: 0; font: 600 11px/1 var(--sans); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted);
-  display: flex; justify-content: space-between; gap: 8px;
+.pane-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
+.pane h2 { margin: 0; font: 400 13px/1.3 var(--sans); color: var(--muted); min-width: 0; }
+.pane h2 b {
+  font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg); margin-right: 6px;
 }
-.pane h2 output { font: 500 12px var(--mono); text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.pane-head output { font: 500 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pane-head label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
 textarea {
   flex: 1; min-height: 240px; resize: none; width: 100%; padding: 12px; border-radius: 8px;
   border: 1px solid var(--line); background: var(--panel); color: var(--fg);
@@ -79,6 +104,7 @@ textarea {
 }
 #screen {
   flex: 1; min-height: 300px; border-radius: 8px; background: var(--term); padding: 10px 0 10px 12px;
+  border: 1px solid var(--line);
   overflow: hidden; position: relative;
 }
 #screen .xterm { height: 100%; }
@@ -86,54 +112,145 @@ textarea {
   position: absolute; inset: 0; display: grid; place-items: center; color: var(--term-fg);
   font: 13px var(--mono); background: var(--term);
 }
-#notes { margin: 0; padding: 0; list-style: none; font: 12.5px/1.5 var(--mono); min-height: 1.5em; }
-#notes li.error { color: var(--bad); }
-#notes li.warning { color: var(--warn); }
-#notes li.ok { color: var(--muted); }
-.copied { color: var(--accent); font-size: 13px; }
+/* What was drawn: a check, or a cross for anything lost or wrong, and
+   the details in a tooltip on hover, focus, or a tap. */
+.meta { display: flex; align-items: center; gap: 6px; }
+.status { position: relative; display: inline-flex; }
+.status-btn {
+  display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0;
+  border-radius: 50%; background: none; color: var(--accent); cursor: help;
+}
+.status-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.status-btn .cross { display: none; }
+.status-btn[data-state="problem"] { color: var(--bad); }
+.status-btn[data-state="problem"] .check { display: none; }
+.status-btn[data-state="problem"] .cross { display: block; }
+.status-btn[data-state="loading"] { visibility: hidden; }
+#notes {
+  position: absolute; z-index: 5; top: calc(100% + 6px); right: 0; width: max-content; max-width: min(420px, calc(100vw - 32px));
+  margin: 0; padding: 8px 12px; list-style: none; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--fg); font: 12.5px/1.5 var(--mono); box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+  font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0;
+  display: none;
+}
+.status:hover #notes, .status:focus-within #notes, .status.open #notes { display: block; }
+#notes li + li { margin-top: 4px; }
+#notes li.error, #notes li.warning { color: var(--bad); }
+dialog {
+  border: 1px solid var(--line); border-radius: 12px; padding: 0; width: min(380px, calc(100vw - 32px));
+  background: var(--panel); color: var(--fg); box-shadow: 0 18px 48px rgb(0 0 0 / 0.25);
+}
+dialog::backdrop { background: rgb(8 14 15 / 0.45); }
+dialog form { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px 20px; }
+dialog h2 { margin: 0; font: 600 15px var(--sans); display: flex; justify-content: space-between; align-items: center; }
+.field { display: flex; flex-direction: column; gap: 6px; border: 0; margin: 0; padding: 0; }
+.field legend, .checks legend { font-size: 12px; color: var(--muted); padding: 0; margin-bottom: 6px; }
+/* The flow's direction: three choices side by side, the picked one raised. */
+.segments {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 3px;
+  border-radius: 9px; background: var(--bg); border: 1px solid var(--line);
+}
+.segments label { position: relative; cursor: pointer; }
+.segments input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.segments span {
+  display: flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 8px; border-radius: 6px;
+  font-size: 13px; font-weight: 500; color: var(--muted); transition: background 0.12s, color 0.12s;
+}
+.segments svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.segments label:hover span { color: var(--fg); }
+.segments input:checked + span { background: var(--panel); color: var(--fg); box-shadow: 0 1px 3px rgb(0 0 0 / 0.18), 0 0 0 1px var(--line); }
+.segments input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
+.checks { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.checks label { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.checks small { display: block; color: var(--muted); font-size: 12px; }
+.checks input { margin-top: 3px; accent-color: var(--accent); }
+.toast {
+  position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
+  background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 500;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.2);
+}
 @media (max-width: 760px) {
   main { grid-template-columns: 1fr; }
   textarea { min-height: 200px; }
 }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (max-width: 520px) { .pane h2 { font-size: 0; } .pane h2 b { font-size: 11px; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
 <header>
   <h1>cligram <span>playground</span></h1>
-  <p>Write a Mermaid flowchart or cligram YAML; the terminal shows what <code>cligram</code> prints at its size. <a href="https://github.com/isacikgoz/cligram">GitHub</a></p>
+  <nav class="icons" aria-label="Page">
+    <button class="icon" id="share" type="button" aria-label="Copy a link to this diagram" title="Copy a link to this diagram">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path class="stroke" d="M10 13.5a4.5 4.5 0 0 0 6.4.4l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2"/><path class="stroke" d="M14 10.5a4.5 4.5 0 0 0-6.4-.4l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2"/></svg>
+    </button>
+    <button class="icon" id="settings" type="button" aria-label="Drawing settings" title="Drawing settings" aria-haspopup="dialog">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle class="stroke" cx="12" cy="12" r="3"/><path class="stroke" d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+      <span class="dot" id="changed" hidden></span>
+    </button>
+    <button class="icon" id="theme" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">
+      <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
+      <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path class="stroke" d="M12 1.5v3M12 19.5v3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M1.5 12h3M19.5 12h3M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1"/></svg>
+    </button>
+    <a class="icon" href="https://github.com/isacikgoz/cligram" aria-label="cligram on GitHub" title="cligram on GitHub">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+    </a>
+  </nav>
 </header>
-
-<div class="bar" role="toolbar" aria-label="Drawing options">
-  <label for="example">Example
-    <select id="example"></select>
-  </label>
-  <label for="orient">Reads
-    <select id="orient">
-      <option value="">as written</option>
-      <option value="across">left to right</option>
-      <option value="down">top to bottom</option>
-    </select>
-  </label>
-  <label for="fitHeight"><input type="checkbox" id="fitHeight"> Fit the height too</label>
-  <label for="color"><input type="checkbox" id="color" checked> Color</label>
-  <label for="ascii"><input type="checkbox" id="ascii"> ASCII only</label>
-  <span class="grow"></span>
-  <span class="copied" id="copied" hidden>Link copied</span>
-  <button class="primary" id="share" type="button">Copy link</button>
-</div>
 
 <main>
   <section class="pane">
-    <h2><span>Source</span></h2>
-    <textarea id="src" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="Diagram source"></textarea>
+    <div class="pane-head">
+      <h2 id="srcHead"><b>Source</b>a Mermaid flowchart or cligram YAML</h2>
+      <label for="example"><span class="visually-hidden">Example</span>
+        <select id="example" aria-label="Example"></select>
+      </label>
+    </div>
+    <textarea id="src" spellcheck="false" autocapitalize="off" autocomplete="off" aria-labelledby="srcHead"></textarea>
   </section>
   <section class="pane">
-    <h2><span>Terminal</span><output id="size" aria-live="polite"></output></h2>
+    <div class="pane-head">
+      <h2><b>Terminal</b>what cligram prints at this size</h2>
+      <div class="meta">
+        <output id="size"></output>
+        <span class="status">
+          <button class="status-btn" id="status" type="button" data-state="loading" aria-describedby="notes" aria-label="What was drawn">
+            <svg class="check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+            <svg class="cross" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+          <ul id="notes" role="tooltip" aria-live="polite"></ul>
+        </span>
+      </div>
+    </div>
     <div id="screen"><div id="loading">Loading cligram…</div></div>
-    <ul id="notes" aria-live="polite"></ul>
   </section>
 </main>
+
+<dialog id="options" aria-labelledby="optionsHead">
+  <form method="dialog">
+    <h2 id="optionsHead">Drawing settings
+      <button class="icon" id="closeOptions" value="close" aria-label="Close settings" title="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path class="stroke" d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </h2>
+    <fieldset class="field segmented" id="orient">
+      <legend>The flow reads</legend>
+      <div class="segments">
+        <label><input type="radio" name="orient" value="" checked><span>As written</span></label>
+        <label><input type="radio" name="orient" value="across"><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M14 7l5 5-5 5"/></svg>Across</span></label>
+        <label><input type="radio" name="orient" value="down"><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v15M7 14l5 5 5-5"/></svg>Down</span></label>
+      </div>
+    </fieldset>
+    <fieldset class="checks">
+      <legend>Drawing</legend>
+      <label for="fitHeight"><input type="checkbox" id="fitHeight"><span>Fit the height too<small>Rearrange the flow to fit the terminal's rows as well as its columns.</small></span></label>
+      <label for="color"><input type="checkbox" id="color" checked><span>Color<small>Lines, labels and states in the terminal's colors.</small></span></label>
+      <label for="ascii"><input type="checkbox" id="ascii"><span>ASCII only<small>For terminals that cannot show box drawing characters.</small></span></label>
+    </fieldset>
+  </form>
+</dialog>
+<div class="toast" id="copied" role="status" hidden>Link copied</div>
 
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
@@ -237,7 +354,45 @@ const term = new Terminal({
   fontFamily: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
   fontSize: 13,
   lineHeight: 1,
-  theme: { background: "#0f1416", foreground: "#d8e1e3", cursor: "#0f1416" },
+});
+
+// cligram paints lines gray (bright black), labels blue, and states green,
+// cyan, red and yellow: each palette keeps those readable on its ground.
+const palettes = {
+  dark: {
+    background: "#0f1416", foreground: "#d8e1e3", cursor: "#0f1416", selectionBackground: "#2a3a3d",
+    black: "#0f1416", red: "#ff6b6b", green: "#4fd18b", yellow: "#e2b04a", blue: "#6ea8fe",
+    magenta: "#c792ea", cyan: "#3cc6c1", white: "#d8e1e3", brightBlack: "#6b7a7d", brightWhite: "#ffffff",
+  },
+  light: {
+    background: "#fbfcfc", foreground: "#182224", cursor: "#fbfcfc", selectionBackground: "#cfe3e2",
+    black: "#182224", red: "#b3261e", green: "#1a7f4b", yellow: "#8a5a00", blue: "#1f5fbf",
+    magenta: "#8e3fb0", cyan: "#0a7f7c", white: "#5b6b6e", brightBlack: "#8b979a", brightWhite: "#000000",
+  },
+};
+
+// The theme is the system's until one is picked; a pick is remembered.
+const system = matchMedia("(prefers-color-scheme: dark)");
+function picked() {
+  try { return localStorage.getItem("cligram-theme"); } catch { return null; }
+}
+function applyTheme() {
+  const choice = picked();
+  const dark = choice ? choice === "dark" : system.matches;
+  if (choice) document.documentElement.dataset.theme = choice;
+  else delete document.documentElement.dataset.theme;
+  document.documentElement.classList.toggle("dark", dark);
+  term.options.theme = palettes[dark ? "dark" : "light"];
+  const label = dark ? "Switch to light mode" : "Switch to dark mode";
+  $("theme").setAttribute("aria-label", label);
+  $("theme").title = label;
+}
+applyTheme();
+system.addEventListener("change", applyTheme);
+$("theme").addEventListener("click", () => {
+  const dark = document.documentElement.classList.contains("dark");
+  try { localStorage.setItem("cligram-theme", dark ? "light" : "dark"); } catch {}
+  applyTheme();
 });
 const fit = new FitAddon.FitAddon();
 term.loadAddon(fit);
@@ -255,15 +410,19 @@ function draw() {
     Height: $("fitHeight").checked ? term.rows : 0,
     ASCII: $("ascii").checked,
     Color: $("color").checked,
-    Orientation: $("orient").value,
+    Orientation: orientation(),
   };
   const r = JSON.parse(cligramDraw(JSON.stringify(request)));
   term.reset();
   term.write("\x1b[?25l");
   notes.replaceChildren();
   if (r.error) {
+    // Nothing is drawn, so the terminal says what is wrong, as cligram
+    // would on stderr.
     size.textContent = "";
+    term.write("\x1b[31m" + r.error + "\x1b[0m");
     for (const line of r.error.split("\n")) note("error", line);
+    $("status").dataset.state = "problem";
     return;
   }
   term.write((r.title ? r.title + "\n\n" : "") + r.drawing);
@@ -271,6 +430,7 @@ function draw() {
   size.textContent = `${r.width}×${r.height}` + (r.fits ? " · fits" : ` · scrolls in ${term.cols}×${term.rows}`);
   if (r.warnings.length === 0) note("ok", "Every node, edge and label is drawn.");
   for (const w of r.warnings) note("warning", w);
+  $("status").dataset.state = r.warnings.length === 0 ? "ok" : "problem";
 }
 function note(kind, text) {
   const li = document.createElement("li");
@@ -279,11 +439,37 @@ function note(kind, text) {
   notes.append(li);
 }
 
+let toastTimer = 0;
+function toast(text, ms) {
+  $("copied").textContent = text;
+  $("copied").hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { $("copied").hidden = true; }, ms);
+}
+
+// A tap shows the tooltip where there is no hover; a tap elsewhere hides it.
+$("status").addEventListener("click", (e) => {
+  e.stopPropagation();
+  $("status").parentElement.classList.toggle("open");
+});
+document.addEventListener("click", () => $("status").parentElement.classList.remove("open"));
+
 let timer = 0;
 function later() { clearTimeout(timer); timer = setTimeout(draw, 120); }
 
 src.addEventListener("input", later);
-for (const id of ["orient", "fitHeight", "color", "ascii"]) $(id).addEventListener("change", draw);
+function orientation() { return document.querySelector('input[name="orient"]:checked').value; }
+
+// Settings apply as they change; the dot on the icon says some differ
+// from their defaults.
+function settingsChanged() {
+  $("changed").hidden = !(orientation() || $("fitHeight").checked || !$("color").checked || $("ascii").checked);
+  draw();
+}
+for (const id of ["orient", "fitHeight", "color", "ascii"]) $(id).addEventListener("change", settingsChanged);
+$("settings").addEventListener("click", () => $("options").showModal());
+// A click on the backdrop, outside the form, closes the dialog too.
+$("options").addEventListener("click", (e) => { if (e.target === $("options")) $("options").close(); });
 $("example").addEventListener("change", (e) => {
   src.value = examples[Number(e.target.value)].source;
   history.replaceState(null, "", location.pathname);
@@ -294,8 +480,7 @@ $("share").addEventListener("click", async () => {
   history.replaceState(null, "", url);
   try {
     await navigator.clipboard.writeText(url);
-    $("copied").hidden = false;
-    setTimeout(() => { $("copied").hidden = true; }, 1600);
+    toast("Link copied", 1600);
   } catch {
     prompt("Copy this link", url);
   }
@@ -323,7 +508,7 @@ async function start() {
       $("example").prepend(o);
       $("example").value = "";
     } catch {
-      note("error", "The link's diagram could not be read; showing an example instead.");
+      toast("The link's diagram could not be read, so here is an example.", 4000);
     }
   }
   await document.fonts.load('13px "JetBrains Mono"');

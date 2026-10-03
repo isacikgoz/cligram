@@ -64,7 +64,7 @@ and the warnings as JSON, when you want to check before showing it.
 
 ## Also
 
-- YAML works too (`nodes:` and `edges:`); see the repository's README.
+- YAML works too (`nodes:` and `edges:`); see examples/release.yaml in the repository.
 - `cligram flow.mmd` draws a file; `-ascii` draws with ASCII only, for
   places that mangle box drawing characters.
 - Go programs use the library directly, and package `bubble` shows a

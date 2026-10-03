@@ -1,62 +1,43 @@
 # cligram
 
-Flow diagrams for the terminal, from Mermaid, YAML or Go. Drawn in
-text: boxes, decisions and labelled edges, laid out to fit your terminal,
-and repainted live as a run moves through them.
+Mermaid flowcharts, drawn in your terminal: laid out to fit it, and live as
+a run moves through them.
 
-**[Try it in your browser](https://isacikgoz.me/cligram/)**: paste a
-Mermaid flowchart and see what cligram draws in a terminal that size.
+<a href="https://isacikgoz.me/cligram/">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/playground-dark.png">
+    <img alt="The cligram playground: a Mermaid flowchart and the terminal drawing of it" src="docs/playground-light.png">
+  </picture>
+</a>
 
-[![100 random diagrams, each drawn by cligram and read back as a check](docs/fuzz.gif)](https://asciinema.org/a/gWsYXyq89czfDDtD)
+**[Try the playground](https://isacikgoz.me/cligram/)**: paste a flowchart, see it drawn.
 
-*100 random diagrams, each drawn and then read back from the text alone to
-check it says what the diagram says. Click to play.*
+## Use it
 
 ```sh
-go install github.com/isacikgoz/cligram/cmd/cligram@latest   # the command
-go get github.com/isacikgoz/cligram                          # the library
-```
-
-## From YAML
-
-```yaml
-title: Release
-nodes:
-  triage: Triage
-  ready:
-    text: Ready to ship?
-    kind: decision
-  ship: { text: Ship it, kind: end }
-  fix: { text: Fix it, class: agent }
-edges:
-  - triage -> ready
-  - ready -> ship: yes
-  - ready -> fix: no
-  - fix -> ready
+go install github.com/isacikgoz/cligram/cmd/cligram@latest
 ```
 
 ```sh
-cligram -width 80 examples/release.yaml
+cligram -width 80 <<'EOF'
+flowchart LR
+  task([Task]) --> plan[Plan] --> act[Run tools]
+  act --> check{Done?}
+  check -->|no| plan
+  check -->|yes| done([Answer])
+EOF
 ```
 
 ```text
-Release
-
-╭──────────╮    ╔══════════════════╗              ┏━━━━━━━━━━━┓
-│   Triage ├───►║   Ready to ship? ╟─┬─[ yes ]───►┃   Ship it ┃
-╰──────────╯    ╚══════════════════╝ │            ┗━━━━━━━━━━━┛
-                         ▲           │
-                         │           │
-                         │           │            ╭──────────╮
-                         │           └───[ no ]──►│   Fix it │
-                         │                        ╰────┬─────╯
-                         │                             │
-                         └─────────────────────────────┘
+                ┌───[ no ]────────────────────┐
+                ▼                             │
+┏━━━━━━━━┓  ╭────────╮  ╭─────────────╮  ╔════╧════╗              ┏━━━━━━━━━━┓
+┃   Task ┠─►│   Plan ├─►│   Run tools ├─►║   Done? ╟───[ yes ]───►┃   Answer ┃
+┗━━━━━━━━┛  ╰────────╯  ╰─────────────╯  ╚═════════╝              ┗━━━━━━━━━━┛
 ```
 
-A node is a text, or `text`, `kind` (`step`, `decision` or `end`), `class`
-and `at`, a placement such as `right of ready` or `below a and b`. Without
-`-width`, the drawing fits the terminal it is printed to.
+It also reads cligram's YAML (see [examples/release.yaml](examples/release.yaml)),
+and without `-width` fits the terminal it prints to.
 
 ## From Go
 
@@ -78,71 +59,14 @@ fmt.Println(l.Render(cligram.State{
 }, cligram.Plain))
 ```
 
-```text
-╭──────────╮    ╔══════════════════╗              ╭───────────╮
-│ ✓ Triage ├───►║ ▸ Ready to ship? ╟─┬─[ yes ]───►│   Ship it │
-╰──────────╯    ╚══════════════════╝ │            ╰───────────╯
-                         ▲           │
-                         │           │
-                         │           │            ╭──────────╮
-                         │           └───[ no ]──►│   Fix it │
-                         │                        ╰────┬─────╯
-                         │                             │
-                         └─────────────────────────────┘
-```
-
-Lay out once per size, then repaint as often as the run moves: a box never
-moves when its state changes. Use `cligram.ANSI`, or a `Palette` of your
-own colors, instead of `cligram.Plain` for color.
+Lay out once per size, then repaint as the run moves: boxes never move.
+Package `bubble` is a Bubble Tea component with keyboard focus and
+sub-diagrams; `go run ./examples/live` shows it.
 
 ## For agents
 
-An agent already writes Mermaid; cligram shows it. Pipe a flowchart in:
+- **Skill**: `npx skills add isacikgoz/cligram`
+- **MCP**: `claude mcp add cligram -- cligram mcp` gives a `draw` tool
+- **JSON**: `cligram -json` returns the drawing, its size and its warnings
 
-```sh
-cligram -width 80 <<'EOF'
-flowchart LR
-  task([Task]) --> plan[Plan] --> act[Run tools]
-  act --> check{Done?}
-  check -->|no| plan
-  check -->|yes| done([Answer])
-EOF
-```
-
-```text
-                ┌───[ no ]────────────────────┐
-                ▼                             │
-┏━━━━━━━━┓  ╭────────╮  ╭─────────────╮  ╔════╧════╗              ┏━━━━━━━━━━┓
-┃   Task ┠─►│   Plan ├─►│   Run tools ├─►║   Done? ╟───[ yes ]───►┃   Answer ┃
-┗━━━━━━━━┛  ╰────────╯  ╰─────────────╯  ╚═════════╝              ┗━━━━━━━━━━┛
-```
-
-`[text]` is a step, `{text}` a decision, `([text])` an end, `-->|label|`
-labels an edge; the rest of Mermaid's flowchart syntax is read, and what
-cligram does not draw (styles, subgraph frames) is left out.
-
-- **A skill**: `npx skills add isacikgoz/cligram` teaches Claude Code and
-  other agents when to draw and how ([SKILL.md](.claude/skills/cligram/SKILL.md)).
-- **An MCP server**: `claude mcp add cligram -- cligram mcp` gives an agent
-  a `draw` tool, which returns the drawing and what to fix when something
-  did not fit.
-- **JSON**: `cligram -json` writes the drawing, its size, whether it fits
-  and its warnings, for a program to check.
-
-## More
-
-- **Placement**: `cligram.At("right of x")` pins a node; everything else is
-  placed by following the edges.
-- **Fitting**: `Fit(w, h)` compacts, wraps the flow like a snake, turns it,
-  or narrows text, and `Reveal` with `RenderView` scrolls what still does
-  not fit.
-- **Live in a TUI**: package `bubble` is a Bubble Tea component with keyboard
-  focus that follows the run and nodes that open into sub-diagrams.
-  `go run ./examples/live` shows one.
-
-[AGENTS.md](AGENTS.md) is the full guide; [docs/design.md](docs/design.md)
-has the decisions behind it.
-
-## License
-
-MIT, see [LICENSE](LICENSE).
+[AGENTS.md](AGENTS.md) is the full guide. MIT licensed.

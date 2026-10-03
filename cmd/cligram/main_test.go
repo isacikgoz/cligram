@@ -33,51 +33,32 @@ func readme(t *testing.T) string {
 	return string(b)
 }
 
-// The README shows a file, a command and what it draws: all three must be
-// what this command does with that file.
-func TestTheReadmeYAMLExampleIsWhatItDraws(t *testing.T) {
-	md := readme(t)
-	file, err := os.ReadFile("../../examples/release.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if y := blocks(t, md, "yaml"); len(y) == 0 || y[0] != string(file) {
-		t.Errorf("the README's YAML is not examples/release.yaml")
-	}
-	if !strings.Contains(md, "cligram -width 80 examples/release.yaml") {
-		t.Error("the README does not show the command")
-	}
+// The README points to examples/release.yaml: it draws, whole.
+func TestTheReleaseExampleDraws(t *testing.T) {
 	var out, errs bytes.Buffer
-	if code := run([]string{"-width", "80", "../../examples/release.yaml"}, nil, &out, &errs); code != 0 {
+	if code := run([]string{"-width", "80", "../../examples/release.yaml"}, nil, &out, &errs); code != 0 || errs.Len() > 0 {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
-	if text := blocks(t, md, "text"); len(text) == 0 || text[0] != out.String() {
-		t.Errorf("the README's drawing is not what the command draws:\n%s", out.String())
+	if !strings.Contains(out.String(), "Ready to ship?") {
+		t.Errorf("drew:\n%s", out.String())
 	}
 }
 
-// The README's Go example and its drawing are Example in example_test.go,
-// which go test runs and checks.
+// The README's Go example is Example in example_test.go, which go test
+// runs and checks.
 func TestTheReadmeGoExampleIsTheTestedExample(t *testing.T) {
 	md := readme(t)
 	src, err := os.ReadFile("../../example_test.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := regexp.MustCompile(`(?s)func Example\(\) \{\n(.*?)\n\t// Output:\n(.*?)\n\}`).FindStringSubmatch(string(src))
+	m := regexp.MustCompile(`(?s)func Example\(\) \{\n(.*?)\n\t// Output:\n`).FindStringSubmatch(string(src))
 	if m == nil {
 		t.Fatal("no Example in example_test.go")
 	}
 	body := strings.ReplaceAll(strings.TrimSpace(m[1]), "\n\t", "\n")
-	var output []string
-	for _, line := range strings.Split(m[2], "\n") {
-		output = append(output, strings.TrimPrefix(strings.TrimPrefix(line, "\t//"), " "))
-	}
 	if g := blocks(t, md, "go"); len(g) == 0 || strings.TrimSpace(g[0]) != body {
 		t.Errorf("the README's Go is not Example's body:\n%s", body)
-	}
-	if text := blocks(t, md, "text"); len(text) < 2 || strings.TrimRight(text[1], "\n") != strings.Join(output, "\n") {
-		t.Errorf("the README's Go drawing is not Example's output:\n%s", strings.Join(output, "\n"))
 	}
 }
 
@@ -126,8 +107,8 @@ func TestASCIIDrawsWithASCIIOnly(t *testing.T) {
 	}
 }
 
-// The README's agent example pipes a flowchart in: what it shows is what
-// the command draws from it.
+// The README pipes a flowchart in: what it shows is what the command
+// draws from it.
 func TestTheReadmeMermaidExampleIsWhatItDraws(t *testing.T) {
 	md := readme(t)
 	m := regexp.MustCompile("(?s)```sh\ncligram -width 80 <<'EOF'\n(.*?)EOF\n```").FindStringSubmatch(md)
@@ -138,7 +119,7 @@ func TestTheReadmeMermaidExampleIsWhatItDraws(t *testing.T) {
 	if code := run([]string{"-width", "80"}, strings.NewReader(m[1]), &out, &errs); code != 0 || errs.Len() > 0 {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
-	if text := blocks(t, md, "text"); len(text) < 3 || text[2] != out.String() {
+	if text := blocks(t, md, "text"); len(text) == 0 || text[0] != out.String() {
 		t.Errorf("the README's Mermaid drawing is not what the command draws:\n%s", out.String())
 	}
 }
