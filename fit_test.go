@@ -1,6 +1,7 @@
 package cligram_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -172,5 +173,69 @@ func BenchmarkFitFactoryLoopWraps(b *testing.B) {
 	d := factory()
 	for b.Loop() {
 		d.Layout(cligram.Fit(200, 50))
+	}
+}
+
+// liveLoop is examples/live's diagram: the factory loop as ackt hands it
+// over, with no placements.
+func liveLoop() *cligram.Diagram {
+	d := cligram.New()
+	step := func(id, text string, opts ...cligram.NodeOption) { d.Node(id, text, opts...) }
+	decision := cligram.As(cligram.Decision)
+	agent, human := cligram.Class("agent"), cligram.Class("human")
+	step("triage", "Triage agent runs", agent)
+	step("outcome", "Triage\noutcome", decision)
+	step("impl", "Implementation\nagent runs", agent, cligram.Sub(func(context.Context) (*cligram.Diagram, error) { return cligram.New(), nil }))
+	step("review", "Code review\nagent runs", agent)
+	step("verify", "Verification\nagent runs", agent)
+	step("ready", "Ready to ship?", decision, human)
+	step("ship", "Ship it")
+	step("monitor", "Monitoring\nagent runs", agent)
+	step("issue", "Issue\ndetected", decision)
+	step("create", "Create issue")
+	step("spec", "Spec agent runs", agent)
+	step("specreview", "Human review specs", decision, human)
+	step("human", "Human provides input", human)
+	step("park", "Park issue for now", cligram.As(cligram.Terminal))
+	step("watching", "Continue\nmonitoring", cligram.As(cligram.Terminal))
+
+	edge := func(from, to, label string) { d.Edge(from, to, cligram.Label(label)) }
+	edge("triage", "outcome", "")
+	edge("outcome", "impl", "automatable")
+	edge("outcome", "spec", "needs specs")
+	edge("outcome", "human", "needs human")
+	edge("outcome", "park", "park")
+	edge("spec", "specreview", "")
+	edge("specreview", "impl", "approved")
+	edge("specreview", "spec", "needs revision")
+	edge("human", "triage", "")
+	edge("impl", "review", "")
+	edge("review", "verify", "")
+	edge("verify", "ready", "")
+	edge("ready", "ship", "yes")
+	edge("ready", "impl", "not ready")
+	edge("ship", "monitor", "")
+	edge("monitor", "issue", "")
+	edge("issue", "create", "yes")
+	edge("issue", "watching", "no")
+	edge("create", "triage", "")
+	return d
+}
+
+// A way stacked below another goes below what shares its columns once
+// laid out, not only where things first seemed to be: in examples/live at
+// 160x43 the band the flow wraps into moves over Spec's columns, and
+// Spec keeps below it with a lane for "approved", so "needs revision"
+// goes over Spec rather than round the box below it.
+func TestAStackedWayStaysBelowWhatMovesOverIt(t *testing.T) {
+	l := liveLoop().Layout(cligram.Fit(160, 43))
+	noWarnings(t, l)
+	if !l.Fits() {
+		t.Fatalf("does not fit: %dx%d", l.W, l.H)
+	}
+	watching, spec := rect(t, l, "watching"), rect(t, l, "spec")
+	shares := watching.X < spec.X+spec.W && spec.X < watching.X+watching.W
+	if shares && spec.Y < watching.Y+watching.H+5 {
+		t.Errorf("spec %+v is not a lane below watching %+v", spec, watching)
 	}
 }

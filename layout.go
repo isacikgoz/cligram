@@ -233,6 +233,26 @@ func (d *Diagram) place(cfg layoutConfig) *Layout {
 		}
 		breaks[i] = true
 	}
+	// A wrap made while a later band still pushed the flow out may not be
+	// needed once that band wrapped too: drop each that is not, latest
+	// first.
+	if len(breaks) > 1 {
+		for _, i := range slices.Backward(slices.Sorted(maps.Keys(breaks))) {
+			fewer := maps.Clone(breaks)
+			delete(fewer, i)
+			l.warnings = append([]error(nil), base...)
+			y := newLayouter(l, cfg)
+			y.breaks = fewer
+			y.run()
+			if y.overflow(cfg.wrap) < 0 {
+				breaks = fewer
+			}
+		}
+		l.warnings = append([]error(nil), base...)
+		y := newLayouter(l, cfg)
+		y.breaks = breaks
+		y.run()
+	}
 	return l
 }
 
@@ -338,16 +358,21 @@ type layouter struct {
 	dir    []int
 	band   []int
 	parent []int
-	// stacks are the further ways on auto stacks below the ones before.
-	stacks []stack
+	// stacks are the further ways on auto stacks below the ones before,
+	// and stacked the pairs (t, c) it has put c below t for.
+	stacks  []stack
+	stacked map[[2]int]bool
 }
 
 // stack is a further way on, c, to go below what the way before it led
 // to, prev, where the two share columns: sub is what c leads to, c too.
+// A wrapped band is one too, below everything before it; across is then
+// the gap it keeps, rather than one sized by the edges between.
 type stack struct {
 	c         int
 	prev, sub []int
 	g         int
+	across    int
 }
 
 // gap is gapCells, with default gaps tight when the layout is compact.
@@ -434,20 +459,36 @@ func (y *layouter) stack() {
 	if len(y.stacks) == 0 {
 		return
 	}
-	pos := y.peek(y.main)
+	y.stacked = map[[2]int]bool{}
+	y.restack(y.peek(y.main))
+}
+
+// restack puts each stacked way below what shares its columns at pos,
+// along the main axis, where it is not below it already, and reports
+// whether it did. Solving moves nodes, so what shares columns is checked
+// again once solved.
+func (y *layouter) restack(pos []int) bool {
 	gap := y.gap(Gap{}, y.main)
+	added := false
 	for _, st := range y.stacks {
 		lo, hi := 1<<30, -1<<30
 		for _, n := range st.sub {
 			lo, hi = min(lo, pos[n]), max(hi, pos[n]+y.size(n, y.main))
 		}
-		across := y.gap(Gap{}, y.cross) + y.lanes(st.prev, st.sub)
+		across := st.across
+		if across == 0 {
+			across = y.gap(Gap{}, y.cross) + y.lanes(st.prev, st.sub)
+		}
 		for _, t := range st.prev {
-			if pos[t] < hi+gap && pos[t]+y.size(t, y.main)+gap > lo {
-				y.sys[y.cross].floor(t, st.c, y.size(t, y.cross)+across, st.g, prioAuto)
+			if y.stacked[[2]int{t, st.c}] || pos[t] >= hi+gap || pos[t]+y.size(t, y.main)+gap <= lo {
+				continue
 			}
+			y.stacked[[2]int{t, st.c}] = true
+			y.sys[y.cross].floor(t, st.c, y.size(t, y.cross)+across, st.g, prioAuto)
+			added = true
 		}
 	}
+	return added
 }
 
 // lanes is the room across the flow that the edges between nodes in a
@@ -656,21 +697,21 @@ func (y *layouter) auto() {
 			y.dir[c], y.band[c], y.parent[c] = y.dir[i], y.band[i], i
 			if y.breaks[c] && y.free(c, y.main) && y.free(c, y.cross) {
 				// Wrapped: the flow turns, as a snake does, into a new band
-				// below everything before it, starting under the step it
-				// comes from and reading back the other way.
+				// below everything before it in its columns, starting under
+				// the step it comes from and reading back the other way.
 				y.dir[c], y.band[c] = -y.dir[i], c
 				across := max(y.gap(Gap{}, y.cross), y.labelRoom(i, c, y.cross))
-				for _, t := range order {
-					y.sys[y.cross].floor(t, c, y.size(t, y.cross)+across, g, prioAuto)
-				}
 				if y.dir[c] < 0 {
 					y.sys[y.main].equal(i, c, y.size(i, y.main)-y.size(c, y.main), g, prioAuto)
 				} else {
 					y.sys[y.main].equal(i, c, 0, g, prioAuto)
 				}
+				wrapped := len(y.stacks)
+				y.stacks = append(y.stacks, stack{c: c, prev: slices.Clone(order), g: g, across: across})
 				start := len(order)
 				visit(c)
 				prev = append([]int(nil), order[start:]...)
+				y.stacks[wrapped].sub = prev
 				continue
 			}
 			if y.free(c, y.main) {
@@ -717,10 +758,18 @@ func (y *layouter) auto() {
 	y.order = order
 }
 
-// overflow is the first node, in the order the flow is followed, whose
-// band reaches past limit at it, along the way the flow reads, and that
-// was put there by following an edge, so the flow can wrap at it; or -1.
+// overflow is the node to wrap the flow at, or -1: the first, in the
+// order the flow is followed, whose band reaches past limit at it, along
+// the way the flow reads, and that was put there by following an edge.
+// Of several bands that reach too far, the latest goes first: a band too
+// long for the room pushes the one before it, which then only seems too
+// long itself.
 func (y *layouter) overflow(limit int) int {
+	at, last := -1, -1 // the node to wrap at, and where its band starts in the order
+	where := map[int]int{}
+	for k, i := range y.order {
+		where[i] = k
+	}
 	for _, i := range y.order {
 		// A step right after a band's start wraps into a band of one: a
 		// column, which reading the other way draws better.
@@ -732,11 +781,11 @@ func (y *layouter) overflow(limit int) int {
 		if y.dir[i] < 0 {
 			span = y.pos(b, y.main) + y.size(b, y.main) - y.pos(i, y.main)
 		}
-		if span > limit {
-			return i
+		if span > limit && where[b] > last {
+			at, last = i, where[b]
 		}
 	}
-	return -1
+	return at
 }
 
 // free reports whether nothing the author wrote decides node i on ax.
@@ -766,7 +815,8 @@ func (y *layouter) solve() {
 			r := &y.l.nodes[i].rect
 			r.X, r.Y = pos[axisX][i]+y.pad[i], pos[axisY][i]+y.pad[i]
 		}
-		moved := false
+		// What a stacked way shares columns with may have changed.
+		moved := y.restack(pos[y.main])
 		for a := range n {
 			for b := a + 1; b < n; b++ {
 				ra, rb := y.box(a), y.box(b)
@@ -786,7 +836,6 @@ func (y *layouter) solve() {
 	y.normalize()
 }
 
-// solveAxis solves one axis, raising the soft bounds until they settle.
 // peek is where the nodes would go on ax as things stand, leaving the
 // system as it was: what it would drop is dropped and warned of when it
 // is solved for real.
@@ -798,6 +847,7 @@ func (y *layouter) peek(ax axis) []int {
 	return pos
 }
 
+// solveAxis solves one axis, raising the soft bounds until they settle.
 func (y *layouter) solveAxis(ax axis) []int {
 	s := y.sys[ax]
 	var pos []int
