@@ -43,6 +43,9 @@ func (d *Diagram) fitted(cfg layoutConfig) *Layout {
 	}
 	tries := []layoutConfig{}
 	try := func(o Orientation, compact, wrap bool, lim Limits) {
+		if o != cfg.orient && cfg.keepOrient {
+			return // the reader chose which way it reads
+		}
 		c := cfg
 		c.orient, c.compact = o, compact
 		if wrap {
@@ -90,6 +93,14 @@ func (d *Diagram) fitted(cfg layoutConfig) *Layout {
 			if l.W <= room.X && l.H <= room.Y && l.lost() == 0 {
 				l.fits = true
 				return l
+			}
+			// It fits but lost a label: room round the label's edge, if
+			// that still fits, keeps it.
+			if l.W <= room.X && l.H <= room.Y && l.lost() < 1000 {
+				if r := d.placeAndRoute(c); r.W <= room.X && r.H <= room.Y && r.lost() == 0 {
+					r.fits = true
+					return r
+				}
 			}
 			if l.lost() < 1000 {
 				nearly++
@@ -144,7 +155,7 @@ func (d *Diagram) fitted(cfg layoutConfig) *Layout {
 
 // fallbackTries is how many ways that draw every edge but lose a label
 // are routed before the best of them is taken.
-const fallbackTries = 2
+const fallbackTries = 4
 
 // betterFallback reports whether a is a better layout than b for room
 // when neither fits it.

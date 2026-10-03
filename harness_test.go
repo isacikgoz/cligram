@@ -28,6 +28,7 @@ type drawCase struct {
 	fit    *[2]int
 	states [2]cligram.State
 	view   cligram.Rect
+	groups []cligram.Group
 }
 
 type genNode struct {
@@ -35,6 +36,7 @@ type genNode struct {
 	kind     cligram.Kind
 	class    string
 	sub      bool
+	group    string
 }
 
 var (
@@ -58,6 +60,19 @@ func generate(seed uint64) drawCase {
 	ids := make([]string, n)
 	for i := range n {
 		ids[i] = fmt.Sprintf("n%d", i)
+	}
+	// Groups in half the diagrams, some inside others, from a stream of their
+	// own so every seed draws the diagram it always did.
+	grng := rand.New(rand.NewPCG(seed, 0x6a0))
+	if grng.IntN(2) == 0 {
+		for k := range 1 + grng.IntN(3) {
+			g := cligram.Group{ID: fmt.Sprintf("g%d", k), Title: pick(grng, []string{"Build", "Review loop", "審查", "a rather long group title here", "CI"})}
+			if k > 0 && grng.IntN(2) == 0 {
+				g.Parent = c.groups[grng.IntN(k)].ID
+			}
+			c.groups = append(c.groups, g)
+			c.d.Group(g.ID, g.Title, cligram.Inside(g.Parent))
+		}
 	}
 	for i, id := range ids {
 		g := genNode{id: id}
@@ -100,21 +115,31 @@ func generate(seed uint64) drawCase {
 			}
 			opts = append(opts, cligram.At(pick(rng, relations)+" "+target+pick(rng, gaps)))
 		}
+		if len(c.groups) > 0 && grng.IntN(3) > 0 {
+			g.group = c.groups[grng.IntN(len(c.groups))].ID
+			opts = append(opts, cligram.In(g.group))
+		}
 		c.d.Node(id, g.text, opts...)
 		c.nodes = append(c.nodes, g)
 	}
-	seen := map[cligram.EdgeRef]bool{}
+	seen := map[cligram.EdgeRef]cligram.LineStyle{}
+	// Line styles come from a stream of their own, so every seed draws
+	// the diagram it always did, now with some lines dashed or thick.
+	styles := rand.New(rand.NewPCG(seed, 0x5eed))
 	edge := func(from, to string) {
 		label := ""
 		if rng.IntN(2) == 0 {
 			label = pick(rng, labelWords)
 		}
 		e := cligram.Edge{From: from, To: to, Label: label}
-		c.d.Edge(from, to, cligram.Label(label))
-		if !seen[e.Ref()] {
-			seen[e.Ref()] = true
+		line, again := seen[e.Ref()]
+		if !again {
+			line = pick(styles, []cligram.LineStyle{cligram.Solid, cligram.Solid, cligram.Solid, cligram.Dashed, cligram.Thick})
+			seen[e.Ref()] = line
+			e.Line = line
 			c.edges = append(c.edges, e)
 		}
+		c.d.Edge(from, to, cligram.Label(label), cligram.Line(line))
 	}
 	// Mostly a flow onward, with branches, loops back and the odd self-loop.
 	for i := 1; i < n; i++ {
@@ -192,6 +217,7 @@ func checkCase(t *testing.T, c drawCase) {
 	}
 	byID := checkBoxes(t, c, pic, l)
 	checkEdges(t, c, pic, byID, warnings, l)
+	checkFrames(t, c, pic, byID, l)
 
 	// Painting another run moves nothing.
 	other, err := reader.Read(l.Render(c.states[1], theme))
@@ -319,16 +345,25 @@ func checkEdges(t *testing.T, c drawCase, pic *reader.Picture, byID map[int]stri
 			lost := slices.ContainsFunc(warnings, func(w string) bool {
 				return strings.Contains(w, fmt.Sprintf("edge %s -> %s %q has no room", e.From, e.To, e.Label))
 			})
+			// Of the lines it could be, one of its own style first: two
+			// edges between the same boxes, both without a label to show,
+			// are told apart by their lines.
+			styleName := map[cligram.LineStyle]string{cligram.Solid: "solid", cligram.Dashed: "dashed", cligram.Thick: "thick"}[e.Line]
 			match := -1
-			for i, g := range gs {
-				if used[i] {
-					continue
-				}
-				if (g.Label == "" && (e.Label == "" || lost)) || (g.Label != "" && sameLabel(g.Label, e.Label)) {
-					match = i
-					if g.Label != "" || e.Label == "" {
-						break
+			for _, ownStyle := range []bool{true, false} {
+				for i, g := range gs {
+					if used[i] || (ownStyle && g.Style != styleName) {
+						continue
 					}
+					if (g.Label == "" && (e.Label == "" || lost)) || (g.Label != "" && sameLabel(g.Label, e.Label)) {
+						match = i
+						if g.Label != "" || e.Label == "" {
+							break
+						}
+					}
+				}
+				if match >= 0 {
+					break
 				}
 			}
 			if match < 0 {
@@ -336,6 +371,11 @@ func checkEdges(t *testing.T, c drawCase, pic *reader.Picture, byID map[int]stri
 				continue
 			}
 			used[match] = true
+			// A line shows its style where it has a straight run of its
+			// own; it never shows one it does not have.
+			if st := gs[match].Style; st != "solid" && st != styleName {
+				t.Errorf("%s -> %s %q: drawn %s, is %v", e.From, e.To, e.Label, st, e.Line)
+			}
 			wantSGR := "90"
 			if taken[e.Ref()] {
 				wantSGR = "32"
@@ -351,6 +391,97 @@ func checkEdges(t *testing.T, c drawCase, pic *reader.Picture, byID map[int]stri
 	for k, gs := range got {
 		if len(want[k]) == 0 {
 			t.Errorf("%s -> %s is drawn %d times but is not in the diagram", k.from, k.to, len(gs))
+		}
+	}
+}
+
+// checkFrames checks every group with nodes in it is drawn as one frame,
+// titled, round exactly its nodes, those of groups inside it too, and
+// inside the frame of the group it is in.
+func checkFrames(t *testing.T, c drawCase, pic *reader.Picture, byID map[int]string, l *cligram.Layout) {
+	t.Helper()
+	parent := map[string]string{}
+	for _, g := range c.groups {
+		parent[g.ID] = g.Parent
+	}
+	in := func(node, group string) bool {
+		for g := node; g != ""; g = parent[g] {
+			if g == group {
+				return true
+			}
+		}
+		return false
+	}
+	group := map[string]string{}
+	for _, n := range c.nodes {
+		group[n.id] = n.group
+	}
+	frameOf := map[string]reader.Frame{}
+	used := make([]bool, len(pic.Frames))
+	// The innermost groups first, each to the smallest frame titled as it
+	// is round its nodes: groups may share a title.
+	depth := func(id string) int {
+		d := 0
+		for g := parent[id]; g != ""; g = parent[g] {
+			d++
+		}
+		return d
+	}
+	groups := slices.Clone(c.groups)
+	slices.SortStableFunc(groups, func(a, b cligram.Group) int { return depth(b.ID) - depth(a.ID) })
+	for _, g := range groups {
+		var members []string
+		for _, n := range c.nodes {
+			if in(n.group, g.ID) {
+				members = append(members, n.id)
+			}
+		}
+		if len(members) == 0 {
+			continue
+		}
+		// Its frame: the one whose title is its title and that holds a
+		// member.
+		found := -1
+		for i, f := range pic.Frames {
+			title := strings.TrimSuffix(f.Title, "…")
+			if used[i] || !strings.HasPrefix(g.Title, title) {
+				continue
+			}
+			for bi, b := range pic.Boxes {
+				if byID[bi] == members[0] && f.Contains(b.X, b.Y) && (found < 0 || f.W*f.H < pic.Frames[found].W*pic.Frames[found].H) {
+					found = i
+				}
+			}
+		}
+		if found < 0 {
+			t.Errorf("group %s %q has no frame round %v\n%s", g.ID, g.Title, members, stripped(l, c.states[0]))
+			continue
+		}
+		used[found] = true
+		f := pic.Frames[found]
+		frameOf[g.ID] = f
+		for bi, b := range pic.Boxes {
+			inside := f.Contains(b.X, b.Y) && f.Contains(b.X+b.W-1, b.Y+b.H-1)
+			member := in(group[byID[bi]], g.ID)
+			switch {
+			case member && !inside:
+				t.Errorf("node %s is in group %s but not in its frame %+v", byID[bi], g.ID, f)
+			case !member && (f.Contains(b.X, b.Y) || f.Contains(b.X+b.W-1, b.Y+b.H-1)):
+				t.Errorf("node %s is in group %s's frame %+v but not in the group", byID[bi], g.ID, f)
+			}
+		}
+	}
+	for _, g := range c.groups {
+		f, ok := frameOf[g.ID]
+		p, pok := frameOf[g.Parent]
+		inside := p.Contains(f.X, f.Y) && p.Contains(f.X+f.W-1, f.Y+f.H-1)
+		if ok && pok && !inside {
+			t.Errorf("group %s's frame %+v is not inside its parent %s's %+v", g.ID, f, g.Parent, p)
+		}
+	}
+	for i, u := range used {
+		if !u {
+			t.Errorf("frame %+v is no group's", pic.Frames[i])
 		}
 	}
 }
@@ -436,4 +567,24 @@ func FuzzDrawings(f *testing.F) {
 	f.Fuzz(func(t *testing.T, seed uint64) {
 		checkCase(t, generate(seed))
 	})
+}
+
+// Layout's work, counted in search steps so it is the same on every
+// machine, stays in its budget: the first 200 random diagrams took 20.8
+// million steps when this was last raised, when a third of them came to
+// have groups (without, they take 15.6 million). A change that needs more
+// should say why, and raise the budget.
+func TestLayoutWorkStaysInBudget(t *testing.T) {
+	if raceEnabled {
+		t.Skip("the work is the same without the race detector, which slows it tenfold")
+	}
+	const budget = 24_000_000
+	before := cligram.Searched()
+	for seed := range uint64(200) {
+		c := generate(seed)
+		c.d.Layout(c.opts...)
+	}
+	if work := cligram.Searched() - before; work > budget {
+		t.Errorf("layout took %d search steps for 200 random diagrams; the budget is %d", work, budget)
+	}
 }

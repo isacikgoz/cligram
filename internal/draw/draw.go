@@ -5,6 +5,7 @@ package draw
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/isacikgoz/cligram"
@@ -20,8 +21,11 @@ type Request struct {
 	Format        string
 	Width, Height int // 0: as wide or tall as it takes
 	ASCII, Color  bool
-	// Orientation is across or down, or empty for what the source says.
+	// Orientation is across or down, kept even where turning the flow
+	// would fit better; or empty for what the source says.
 	Orientation string
+	// State is where a run is: the drawing shows it.
+	State cligram.State
 }
 
 // Drawing is what was drawn.
@@ -35,47 +39,53 @@ type Drawing struct {
 	Warnings []string `json:"warnings"`
 }
 
-// Draw reads r's source and draws it.
-func Draw(r Request) (*Drawing, error) {
-	format := r.Format
-	switch format {
-	case "", "auto":
+// Diagram is a diagram read from its source.
+type Diagram struct {
+	Title   string
+	Diagram *cligram.Diagram
+	Options []cligram.LayoutOption // what the source says about its layout
+	Format  string                 // mermaid or yaml
+}
+
+// Read reads a diagram from source, written as format: yaml, mermaid, or
+// auto, Mermaid if it starts as a Mermaid diagram and YAML otherwise.
+func Read(source, format string) (*Diagram, error) {
+	auto := format == "" || format == "auto"
+	switch {
+	case auto:
 		format = "yaml"
-		if mermaid.Is(r.Source) {
+		if mermaid.Is(source) {
 			format = "mermaid"
 		}
-	case "yaml", "mermaid":
-	default:
-		return nil, fmt.Errorf("format is auto, yaml or mermaid, not %q", r.Format)
+	case format != "yaml" && format != "mermaid":
+		return nil, fmt.Errorf("format is auto, yaml or mermaid, not %q", format)
 	}
-
-	var title string
-	var d *cligram.Diagram
-	var opts []cligram.LayoutOption
-	switch format {
-	case "mermaid":
-		doc, err := mermaid.Parse([]byte(r.Source))
+	if format == "mermaid" {
+		doc, err := mermaid.Parse([]byte(source))
 		if err != nil {
 			return nil, err
 		}
-		title, d, opts = doc.Title, doc.Diagram, doc.Options
-	default:
-		doc, err := yaml.Parse([]byte(r.Source))
-		if err != nil {
-			if r.Format == "" || r.Format == "auto" {
-				err = errors.Join(err, errors.New("(read as YAML; a Mermaid flowchart starts with \"flowchart LR\" or \"flowchart TD\")"))
-			}
-			return nil, err
-		}
-		title, d, opts = doc.Title, doc.Diagram, doc.Options
+		return &Diagram{doc.Title, doc.Diagram, doc.Options, format}, nil
 	}
+	doc, err := yaml.Parse([]byte(source))
+	if err != nil {
+		if auto {
+			err = errors.Join(err, errors.New("(read as YAML; a Mermaid flowchart starts with \"flowchart LR\" or \"flowchart TD\")"))
+		}
+		return nil, err
+	}
+	return &Diagram{doc.Title, doc.Diagram, doc.Options, format}, nil
+}
 
+// Options are the layout options r asks for, after the source's own.
+func (r Request) Options(src *Diagram) ([]cligram.LayoutOption, error) {
+	opts := slices.Clone(src.Options)
 	switch r.Orientation {
 	case "":
 	case "across":
-		opts = append(opts, cligram.WithOrientation(cligram.LeftToRight))
+		opts = append(opts, cligram.WithOrientation(cligram.LeftToRight), cligram.KeepOrientation())
 	case "down":
-		opts = append(opts, cligram.WithOrientation(cligram.TopToBottom))
+		opts = append(opts, cligram.WithOrientation(cligram.TopToBottom), cligram.KeepOrientation())
 	default:
 		return nil, fmt.Errorf("orientation is across or down, not %q", r.Orientation)
 	}
@@ -89,13 +99,27 @@ func Draw(r Request) (*Drawing, error) {
 		}
 		opts = append(opts, cligram.Fit(r.Width, h))
 	}
+	return opts, nil
+}
+
+// Draw reads r's source and draws it.
+func Draw(r Request) (*Drawing, error) {
+	src, err := Read(r.Source, r.Format)
+	if err != nil {
+		return nil, err
+	}
+	opts, err := r.Options(src)
+	if err != nil {
+		return nil, err
+	}
+	title, d, format := src.Title, src.Diagram, src.Format
 	l := d.Layout(opts...)
 	theme := cligram.Plain
 	if r.Color {
 		theme = cligram.ANSI
 	}
 	out := &Drawing{
-		Title: title, Text: l.Render(cligram.State{}, theme),
+		Title: title, Text: l.Render(r.State, theme),
 		Width: l.W, Height: l.H, Fits: l.Fits(), Format: format, Warnings: []string{},
 	}
 	for _, w := range l.Warnings() {

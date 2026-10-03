@@ -1,6 +1,7 @@
 package yaml_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -86,6 +87,54 @@ func TestMistakesAreReportedWithTheirLine(t *testing.T) {
 		_, err := yaml.Parse([]byte(tc.in))
 		if err == nil || !strings.Contains(err.Error(), tc.says) {
 			t.Errorf("%q: got %v, want %q", tc.in, err, tc.says)
+		}
+	}
+}
+
+func TestTheArrowSaysHowTheLineIsDrawn(t *testing.T) {
+	doc, err := yaml.Parse([]byte("nodes: {a: A, b: B, c: C}\nedges:\n  - a -> b\n  - b -.-> c: maybe\n  - c ==> a\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range doc.Diagram.Edges() {
+		got = append(got, fmt.Sprintf("%s>%s:%s:%d", e.From, e.To, e.Label, e.Line))
+	}
+	if want := "a>b::0 b>c:maybe:1 c>a::2"; strings.Join(got, " ") != want {
+		t.Errorf("got %s, want %s", strings.Join(got, " "), want)
+	}
+}
+
+func TestGroupsAreFramesRoundTheirNodes(t *testing.T) {
+	doc, err := yaml.Parse([]byte(`nodes:
+  a: { text: A, group: build }
+  b: { text: B, group: checks }
+  c: C
+groups:
+  build: Build
+  checks: { title: Checks, in: build }
+edges: [a -> b, b -> c]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, g := range doc.Diagram.Groups() {
+		got = append(got, g.ID+":"+g.Title+":"+g.Parent)
+	}
+	for _, n := range doc.Diagram.Nodes() {
+		got = append(got, n.ID+"@"+n.Group)
+	}
+	if want := "build:Build: checks:Checks:build a@build b@checks c@"; strings.Join(got, " ") != want {
+		t.Errorf("got %s", strings.Join(got, " "))
+	}
+	for _, bad := range []struct{ in, says string }{
+		{"nodes: {a: {text: A, group: ghost}}", `node "a" is in group "ghost", which is not a group`},
+		{"nodes: {a: A}\ngroups: {g: {name: x}}", `line 2: "name" is not a key of a group`},
+		{"nodes: {a: A}\ngroups: [g]", "line 2: groups are a mapping"},
+	} {
+		if _, err := yaml.Parse([]byte(bad.in)); err == nil || !strings.Contains(err.Error(), bad.says) {
+			t.Errorf("%q: %v, want %q", bad.in, err, bad.says)
 		}
 	}
 }

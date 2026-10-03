@@ -211,7 +211,8 @@ func TestRandomFlowchartsReadBack(t *testing.T) {
 // Whatever it is given, Parse returns a diagram or an error.
 func FuzzParse(f *testing.F) {
 	for _, s := range []string{"flowchart LR\na-->b", "graph TD\na[x] -->|y| b{z}", "flowchart LR\na -- b --> c & d",
-		"---\ntitle: t\n---\nflowchart LR\na:::c-->b", "flowchart LR\na[\"q\"]"} {
+		"---\ntitle: t\n---\nflowchart LR\na:::c-->b", "flowchart LR\na[\"q\"]",
+		"stateDiagram-v2\n[*] --> a\nstate b <<choice>>\na --> b : x\nstate c {\n[*] --> d\n}\nnote left of a\nn\nend note"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
@@ -220,4 +221,145 @@ func FuzzParse(f *testing.F) {
 			doc.Diagram.Layout(doc.Options...)
 		}
 	})
+}
+
+func TestLinksSayHowTheirLineIsDrawn(t *testing.T) {
+	doc, err := mermaid.Parse([]byte("flowchart LR\n  a --> b\n  a -.-> c\n  a -. maybe .-> d\n  a ==> e\n  a == sure ==> f\n  a --- g\n  a -.- h\n  a === i"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range doc.Diagram.Edges() {
+		got = append(got, fmt.Sprintf("%s:%d", e.To, e.Line))
+	}
+	if want := "b:0 c:1 d:1 e:2 f:2 g:0 h:1 i:2"; strings.Join(got, " ") != want {
+		t.Errorf("got %s, want %s", strings.Join(got, " "), want)
+	}
+}
+
+func TestAStateDiagramIsReadOntoTheSameKinds(t *testing.T) {
+	src := `---
+title: Orders
+---
+stateDiagram-v2
+  direction TB
+  [*] --> Draft
+  state "Waiting for review" as Review
+  Draft --> Review : submit
+  Draft : written by a person
+  state Check <<choice>>
+  Review --> Check
+  Check --> Shipping : approved
+  Check --> Draft : changes
+  note right of Review : someone reviews it
+  note left of Draft
+    a long note
+  end note
+  state Shipping {
+    [*] --> Packed
+    Packed --> Sent:::fast
+    Sent --> [*]
+    --
+    Packed --> Tracked
+  }
+  Shipping --> [*]
+  class Packed human`
+	if !mermaid.Is(src) {
+		t.Fatal("not seen as a diagram")
+	}
+	doc, err := mermaid.Parse([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes, edges := shape(doc.Diagram)
+	wantNodes := []string{"[*]start:terminal::Start", "Draft:step::Draft|written by a person", "Review:step::Waiting for review",
+		"Check:decision::Check", "Shipping:step::Shipping", "Packed:step:human:Packed", "Sent:step:fast:Sent",
+		"Shipping.[*]end:terminal::End", "Tracked:step::Tracked", "[*]end:terminal::End"}
+	wantEdges := []string{"[*]start>Draft:", "Draft>Review:submit", "Review>Check:", "Check>Shipping:approved", "Check>Draft:changes",
+		"Shipping>Packed:", "Packed>Sent:", "Sent>Shipping.[*]end:", "Packed>Tracked:", "Shipping>[*]end:"}
+	if !reflect.DeepEqual(nodes, wantNodes) {
+		t.Errorf("nodes:\n got %q\nwant %q", nodes, wantNodes)
+	}
+	if !reflect.DeepEqual(edges, wantEdges) {
+		t.Errorf("edges:\n got %q\nwant %q", edges, wantEdges)
+	}
+	l := doc.Diagram.Layout(doc.Options...)
+	if l.Orientation() != cligram.TopToBottom || doc.Title != "Orders" {
+		t.Errorf("down %v, title %q", l.Orientation() == cligram.TopToBottom, doc.Title)
+	}
+	for _, w := range l.Warnings() {
+		if strings.Contains(w.Error(), "no way through") {
+			t.Error(w)
+		}
+	}
+}
+
+func TestStateDiagramMistakesGiveTheirLine(t *testing.T) {
+	for _, tc := range []struct{ in, says string }{
+		{"stateDiagram-v2\n  a --> b\n  a ~~> b", `line 3: expected a state, a transition`},
+		{"stateDiagram-v2\n  state A {\n  a --> b", "the composite state A is not closed"},
+		{"stateDiagram-v2\n  }", "line 2: a } closes no composite state"},
+		{"stateDiagram-v2\n", "has no states"},
+	} {
+		_, err := mermaid.Parse([]byte(tc.in))
+		if err == nil || !strings.Contains(err.Error(), tc.says) {
+			t.Errorf("%q: got %v, want %q", tc.in, err, tc.says)
+		}
+	}
+}
+
+func TestSubgraphsAreGroups(t *testing.T) {
+	doc, err := mermaid.Parse([]byte(`flowchart LR
+  plan --> compile
+  subgraph build [Build stage]
+    compile --> link
+    subgraph inner
+      link
+    end
+  end
+  subgraph "Ship it"
+    ship
+  end
+  link --> ship`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var groups []string
+	for _, g := range doc.Diagram.Groups() {
+		groups = append(groups, g.ID+":"+g.Title+":"+g.Parent)
+	}
+	if want := []string{"build:Build stage:", "inner:inner:build", "Ship it:Ship it:"}; !reflect.DeepEqual(groups, want) {
+		t.Errorf("groups %q, want %q", groups, want)
+	}
+	var in []string
+	for _, n := range doc.Diagram.Nodes() {
+		in = append(in, n.ID+":"+n.Group)
+	}
+	if want := []string{"plan:", "compile:build", "link:inner", "ship:Ship it"}; !reflect.DeepEqual(in, want) {
+		t.Errorf("nodes in %q, want %q", in, want)
+	}
+	for _, bad := range []struct{ in, says string }{
+		{"flowchart LR\n  subgraph a\n  x\n", `subgraph "a" is not closed with end`},
+		{"flowchart LR\n  x\n  end", "line 3: an end closes no subgraph"},
+		{"flowchart LR\n  subgraph a\n  x\n  end\n  subgraph a\n  y\n  end", `line 5: subgraph "a" is opened twice`},
+	} {
+		if _, err := mermaid.Parse([]byte(bad.in)); err == nil || !strings.Contains(err.Error(), bad.says) {
+			t.Errorf("%q: %v, want %q", bad.in, err, bad.says)
+		}
+	}
+}
+
+func TestACompositeStateIsAFrameAfterItsBox(t *testing.T) {
+	doc, err := mermaid.Parse([]byte("stateDiagram-v2\n  [*] --> Shipping\n  state Shipping {\n    [*] --> Packed\n    Packed --> [*]\n  }"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var in []string
+	for _, n := range doc.Diagram.Nodes() {
+		in = append(in, n.ID+":"+n.Group)
+	}
+	want := []string{"[*]start:", "Shipping:", "Packed:Shipping", "Shipping.[*]end:Shipping"}
+	if !reflect.DeepEqual(in, want) || len(doc.Diagram.Groups()) != 1 {
+		t.Errorf("nodes in %q, want %q; groups %+v", in, want, doc.Diagram.Groups())
+	}
 }

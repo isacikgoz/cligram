@@ -28,6 +28,8 @@ EOF
 ```
 
 If `cligram` is not found, install it with
+`brew install isacikgoz/tap/cligram`, a binary from
+https://github.com/isacikgoz/cligram/releases, or
 `go install github.com/isacikgoz/cligram/cmd/cligram@latest`.
 
 Then **put the output in your reply inside a code block, exactly as it came
@@ -43,11 +45,28 @@ character's place matters.
 - Shapes say what a node is: `a[text]` a step, `a{text?}` a decision,
   `a([text])` a start or an end. Other Mermaid shapes draw as steps.
 - `a -->|label| b` labels an edge, `a --> b --> c` chains, `a & b --> c`
-  joins several.
+  joins several. `a -.-> b` draws dashed (optional, a fallback), `a ==> b`
+  thick (the main way).
 - `a[text]:::human` gives a node a class; a host may color classes.
+- `subgraph id [Title]` ... `end` draws a titled frame round its nodes:
+  a stage, a team's part, a loop's inside. They nest.
+- A state machine can be a `stateDiagram-v2`: `[*] --> a`, `a --> b : event`,
+  `state c <<choice>>`; `[*]` draws as Start and End.
 - Keep node text short (it wraps at 24 columns, three lines at most) and
   labels shorter (20 columns, one line): cligram cuts longer text with `…`.
 - Name nodes with short ids and give the words in brackets: `ci[CI runs]`.
+
+## Show a plan advancing
+
+Draw the plan once, then again as you work, with events saying where you
+are: `plan done`, `plan -> act` (an edge taken), `act active`. Steps then
+carry a marker: ✓ done, ▸ active, ✗ failed, ◔ waiting. With the MCP tool,
+pass the same `source` and every event so far as `events`. With the
+command, save the flowchart once and pipe the events in:
+
+```sh
+printf 'plan done\nplan -> act\nact active\n' | cligram watch -width 100 plan.mmd
+```
 
 ## Read what it says
 

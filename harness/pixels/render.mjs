@@ -147,7 +147,7 @@ try {
   // Every font loaded before the first terminal measures its cells.
   await p.evaluate(async () => {
     for (const f of ["32px 'JetBrains Mono Pinned'", "32px 'DejaVu Sans Mono Pinned'", "32px 'Noto Sans JP'", "32px 'Noto Emoji'"]) {
-      await document.fonts.load(f, "─│╭╮╰╯═║╔╗┏┓━┃▸►◄▲▼✓✗◔…審査検証🚀");
+      await document.fonts.load(f, "─│╭╮╰╯═║╔╗┏┓━┃┄┆╌╎▸►◄▲▼✓✗◔…審査検証🚀");
     }
     await document.fonts.ready;
   });

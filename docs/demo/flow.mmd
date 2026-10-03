@@ -1,0 +1,14 @@
+---
+title: Release pipeline
+---
+flowchart LR
+  push([Push]) --> lint
+  subgraph build [Build]
+    lint[Lint] --> compile[Compile] --> unit[Unit tests]
+  end
+  subgraph release [Release]
+    stage[Deploy to staging] --> smoke{Smoke tests pass?}
+    smoke -->|yes| prod([Deploy to production])
+  end
+  unit --> stage
+  smoke -.->|no| lint

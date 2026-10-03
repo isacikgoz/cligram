@@ -79,6 +79,25 @@ type Node struct {
 	Place []Placement
 	// Sub, when set, is the diagram the node opens into.
 	Sub SubFunc
+	// Group is the group the node is in, drawn in its frame; empty for
+	// none.
+	Group string
+}
+
+// Group is a frame drawn round some nodes, with a title: a stage of a
+// pipeline, one team's part of a flow. A group may be inside another.
+type Group struct {
+	ID, Title string
+	// Parent is the group this one is inside; empty for none.
+	Parent string
+}
+
+// GroupOption sets something about a group.
+type GroupOption func(*Group)
+
+// Inside puts the group inside another, its frame within the other's.
+func Inside(parent string) GroupOption {
+	return func(g *Group) { g.Parent = parent }
 }
 
 // Label is what the box reads.
@@ -96,7 +115,22 @@ type Edge struct {
 	Label string
 	// FromSide and ToSide pin where the edge leaves and arrives.
 	FromSide, ToSide Side
+	// Line is how the edge's line is drawn: solid, dashed or thick.
+	Line LineStyle
 }
+
+// LineStyle is how an edge's line is drawn. Its straight runs show it;
+// corners and junctions are drawn as a solid line's, and a trunk that
+// edges of different styles share is solid.
+type LineStyle int
+
+const (
+	Solid LineStyle = iota
+	// Dashed is for an edge taken less: optional, or a fallback.
+	Dashed
+	// Thick is for an edge that matters more: the main way.
+	Thick
+)
 
 // EdgeRef names an edge: two edges between the same nodes are told apart
 // by their labels.
@@ -114,6 +148,7 @@ type Diagram struct {
 	nodes    []Node
 	index    map[string]int
 	edges    []Edge
+	groups   []Group
 	problems []error
 }
 
@@ -154,6 +189,11 @@ func At(placement string) NodeOption {
 	}
 }
 
+// In puts the node in a group, drawn inside its frame.
+func In(group string) NodeOption {
+	return func(s *nodeSpec) { s.node.Group = group }
+}
+
 // Sub makes the node open into the diagram f loads.
 func Sub(f SubFunc) NodeOption {
 	return func(s *nodeSpec) { s.node.Sub = f }
@@ -179,12 +219,50 @@ func (d *Diagram) Node(id, text string, opts ...NodeOption) {
 	d.nodes = append(d.nodes, s.node)
 }
 
+// Group adds a group: a frame, titled, round the nodes put In it. A
+// second group with the same id is a problem Check reports.
+func (d *Diagram) Group(id, title string, opts ...GroupOption) {
+	g := Group{ID: id, Title: title}
+	for _, o := range opts {
+		o(&g)
+	}
+	for _, have := range d.groups {
+		if have.ID == id {
+			d.problems = append(d.problems, fmt.Errorf("group %q is declared twice", id))
+			return
+		}
+	}
+	if id == "" {
+		d.problems = append(d.problems, fmt.Errorf("a group titled %q has no id", title))
+		return
+	}
+	d.groups = append(d.groups, g)
+}
+
+// Groups are the groups in the order they were added.
+func (d *Diagram) Groups() []Group { return append([]Group(nil), d.groups...) }
+
+// group finds a group by id.
+func (d *Diagram) group(id string) (Group, bool) {
+	for _, g := range d.groups {
+		if g.ID == id {
+			return g, true
+		}
+	}
+	return Group{}, false
+}
+
 // EdgeOption sets something about an edge.
 type EdgeOption func(*Edge)
 
 // Label says when the edge is taken: an outcome, a condition, "else".
 func Label(text string) EdgeOption {
 	return func(e *Edge) { e.Label = text }
+}
+
+// Line draws the edge's line dashed or thick.
+func Line(s LineStyle) EdgeOption {
+	return func(e *Edge) { e.Line = s }
 }
 
 // From pins the side the edge leaves its first node on.
@@ -258,6 +336,28 @@ func (d *Diagram) Check() error {
 			if !d.has(end) {
 				errs = append(errs, fmt.Errorf("edge %s: %q is not a node", e.describe(), end))
 			}
+		}
+	}
+	for _, n := range d.nodes {
+		if _, ok := d.group(n.Group); n.Group != "" && !ok {
+			errs = append(errs, fmt.Errorf("node %q is in group %q, which is not a group", n.ID, n.Group))
+		}
+	}
+	for _, g := range d.groups {
+		// A group's parents lead out, never back to it.
+		seen := map[string]bool{g.ID: true}
+		for p := g.Parent; p != ""; {
+			parent, ok := d.group(p)
+			if !ok {
+				errs = append(errs, fmt.Errorf("group %q is inside %q, which is not a group", g.ID, p))
+				break
+			}
+			if seen[p] {
+				errs = append(errs, fmt.Errorf("group %q is inside itself, through %q", g.ID, p))
+				break
+			}
+			seen[p] = true
+			p = parent.Parent
 		}
 	}
 	return errors.Join(errs...)

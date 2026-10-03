@@ -203,6 +203,18 @@ func TestTheMCPServerDraws(t *testing.T) {
 		t.Error("no structured result")
 	}
 
+	// The plan advancing: the same source, with the events so far.
+	res, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "draw", Arguments: map[string]any{
+		"source": "flowchart LR\n  a[Plan] --> b{Ready?}\n  b -->|yes| c([Ship])",
+		"events": []string{"a done", "a -> b", "b active", "c shipped"},
+	}})
+	if err != nil || res.IsError {
+		t.Fatalf("%v %+v", err, res)
+	}
+	if got := text(res); !strings.Contains(got, "✓ Plan") || !strings.Contains(got, "▸ Ready?") || !strings.Contains(got, "event 4:") {
+		t.Errorf("drawing with events:\n%s", got)
+	}
+
 	res, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "draw", Arguments: map[string]any{
 		"source": "flowchart LR\n  a ~~> b",
 	}})
@@ -214,5 +226,52 @@ func TestTheMCPServerDraws(t *testing.T) {
 	_ = clientOut.Close()
 	if err := <-done; err != nil {
 		t.Logf("server ended: %v", err)
+	}
+}
+
+func TestMarkdownComesBackWithItsDiagramsDrawn(t *testing.T) {
+	var out, errs bytes.Buffer
+	in := "Steps:\n\n```mermaid\nflowchart LR\n  a[Plan] --> b[Ship]\n```\n\n```mermaid\nflowchart LR\n  a ~~> b\n```\n"
+	if code := run([]string{"md", "-width", "60"}, strings.NewReader(in), &out, &errs); code != 0 {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if !strings.Contains(out.String(), "│   Plan ├───►│   Ship │") || !strings.Contains(out.String(), "<!-- cligram: line 2:") {
+		t.Errorf("out:\n%s", out.String())
+	}
+	if !strings.Contains(errs.String(), "cligram md: the block at line 8: line 2:") {
+		t.Errorf("stderr: %s", errs.String())
+	}
+}
+
+// Without a terminal, cligram watch prints where the events left the run,
+// and says which lines it did not understand.
+func TestWatchPrintsWhereTheRunEnded(t *testing.T) {
+	dir := t.TempDir()
+	flow := dir + "/flow.mmd"
+	if err := os.WriteFile(flow, []byte("flowchart LR\n  build[Build] --> test{Pass?}\n  test -->|no| fix[Fix]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	events := "build done\nbuild -> test\n{\"node\":\"test\",\"status\":\"failed\"}\nnot an event\nfix active\n"
+	if code := run([]string{"watch", flow}, strings.NewReader(events), &out, &errs); code != 0 {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	for _, want := range []string{"✓ Build", "✗ Pass?", "▸ Fix"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("no %q in:\n%s", want, out.String())
+		}
+	}
+	if !strings.Contains(errs.String(), `line 4: "not an event" is not an event`) {
+		t.Errorf("stderr: %s", errs.String())
+	}
+	if code := run([]string{"watch"}, strings.NewReader(""), &out, &errs); code != 2 {
+		t.Errorf("no diagram: exit %d", code)
+	}
+}
+
+func TestVersionSaysWhichBuildThisIs(t *testing.T) {
+	var out, errs bytes.Buffer
+	if code := run([]string{"-version"}, nil, &out, &errs); code != 0 || out.String() != "cligram dev\n" {
+		t.Errorf("exit %d, %q %q", code, out.String(), errs.String())
 	}
 }

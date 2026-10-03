@@ -49,6 +49,19 @@ func diagram(seed uint64) (*cligram.Diagram, []cligram.Edge, cligram.State, stri
 	for i := range n {
 		ids[i] = fmt.Sprintf("n%d", i)
 	}
+	// Groups in about half, some inside others; and lines dashed or thick.
+	extra := rand.New(rand.NewPCG(seed, 0x6a0))
+	var groups []string
+	if extra.IntN(2) == 0 {
+		for k := range 1 + extra.IntN(3) {
+			id, parent := fmt.Sprintf("g%d", k), ""
+			if k > 0 && extra.IntN(2) == 0 {
+				parent = groups[extra.IntN(k)]
+			}
+			d.Group(id, pick(extra, []string{"Build", "Review loop", "Release", "a rather long group title here", "CI"}), cligram.Inside(parent))
+			groups = append(groups, id)
+		}
+	}
 	for i, id := range ids {
 		text := id
 		var more []string
@@ -78,6 +91,9 @@ func diagram(seed uint64) (*cligram.Diagram, []cligram.Edge, cligram.State, stri
 		if i > 0 && rng.IntN(4) == 0 {
 			opts = append(opts, cligram.At(pick(rng, relations)+" "+ids[rng.IntN(i)]+pick(rng, gaps)))
 		}
+		if len(groups) > 0 && extra.IntN(3) > 0 {
+			opts = append(opts, cligram.In(pick(extra, groups)))
+		}
 		d.Node(id, text, opts...)
 	}
 	seen := map[cligram.EdgeRef]bool{}
@@ -88,7 +104,11 @@ func diagram(seed uint64) (*cligram.Diagram, []cligram.Edge, cligram.State, stri
 			label = pick(rng, labelWords)
 		}
 		e := cligram.Edge{From: from, To: to, Label: label}
-		d.Edge(from, to, cligram.Label(label))
+		if seen[e.Ref()] {
+			return
+		}
+		e.Line = pick(extra, []cligram.LineStyle{cligram.Solid, cligram.Solid, cligram.Dashed, cligram.Thick})
+		d.Edge(from, to, cligram.Label(label), cligram.Line(e.Line))
 		if !seen[e.Ref()] {
 			seen[e.Ref()] = true
 			edges = append(edges, e)
@@ -176,6 +196,87 @@ func check(text string, d *cligram.Diagram, edges []cligram.Edge, warnings []str
 	for k := range got {
 		if len(want[k]) == 0 {
 			problems = append(problems, fmt.Sprintf("%s -> %s is drawn but not in the diagram", k.from, k.to))
+		}
+	}
+	// Frames: each group's round exactly its nodes, those inside too.
+	parent := map[string]string{}
+	title := map[string]string{}
+	for _, g := range d.Groups() {
+		parent[g.ID], title[g.ID] = g.Parent, g.Title
+	}
+	in := func(group, of string) bool {
+		for g := group; g != ""; g = parent[g] {
+			if g == of {
+				return true
+			}
+		}
+		return false
+	}
+	groupOf := map[string]string{}
+	for _, n := range d.Nodes() {
+		groupOf[n.ID] = n.Group
+	}
+	depth := func(id string) int {
+		n := 0
+		for g := parent[id]; g != ""; g = parent[g] {
+			n++
+		}
+		return n
+	}
+	groupsInner := d.Groups()
+	sort.SliceStable(groupsInner, func(a, b int) bool { return depth(groupsInner[a].ID) > depth(groupsInner[b].ID) })
+	used := map[int]bool{}
+	for _, g := range groupsInner {
+		var members []string
+		for _, n := range d.Nodes() {
+			if in(n.Group, g.ID) {
+				members = append(members, n.ID)
+			}
+		}
+		if len(members) == 0 {
+			continue
+		}
+		// The smallest frame not taken yet, titled as the group is, round
+		// all its nodes: groups may share a title.
+		var frame *reader.Frame
+		at := -1
+		for i, f := range pic.Frames {
+			if used[i] || !strings.HasPrefix(title[g.ID], strings.TrimSuffix(f.Title, "…")) {
+				continue
+			}
+			all := true
+			for _, m := range members {
+				found := false
+				for bi, b := range pic.Boxes {
+					found = found || (byBox[bi] == m && f.Contains(b.X, b.Y))
+				}
+				all = all && found
+			}
+			if all && (frame == nil || f.W*f.H < frame.W*frame.H) {
+				frame, at = &pic.Frames[i], i
+			}
+		}
+		if frame != nil {
+			used[at] = true
+		}
+		if frame == nil {
+			problems = append(problems, fmt.Sprintf("group %s %q has no frame round %v", g.ID, title[g.ID], members))
+			continue
+		}
+		for bi, b := range pic.Boxes {
+			inside := frame.Contains(b.X, b.Y) && frame.Contains(b.X+b.W-1, b.Y+b.H-1)
+			member := in(groupOf[byBox[bi]], g.ID)
+			if member && !inside {
+				problems = append(problems, fmt.Sprintf("%s is in group %s but out of its frame", byBox[bi], g.ID))
+			}
+			// Placements may leave no way apart: the layout says so.
+			said := false
+			for _, w := range warnings {
+				said = said || strings.Contains(w, fmt.Sprintf("node %q and group %q overlap", byBox[bi], g.ID))
+			}
+			if !member && !said && (frame.Contains(b.X, b.Y) || frame.Contains(b.X+b.W-1, b.Y+b.H-1)) {
+				problems = append(problems, fmt.Sprintf("%s is in group %s's frame but not in the group", byBox[bi], g.ID))
+			}
 		}
 	}
 	return problems

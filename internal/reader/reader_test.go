@@ -226,3 +226,36 @@ func TestEveryWholeGoldenReadsBack(t *testing.T) {
 		}
 	}
 }
+
+func TestFramesAreReadWithTheirTitleAndLinesAcrossThem(t *testing.T) {
+	drawing := strings.Join([]string{
+		"           ╭╌ Build [x] ╌╌╌╌╌╌╌╌╌╌╌╌╮",
+		"           ╎                        ╎",
+		"╭───────╮  ╎   ╭───────────╮        ╎",
+		"│   Out ├─────►│   Compile │        ╎",
+		"╰───────╯  ╎   ╰───┬───────╯        ╎",
+		"           ╎       │                ╎",
+		"           ╰╌╌╌╌╌╌╌│╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╯",
+		"                   ▼",
+		"              ╭─────────╮",
+		"              │   After │",
+		"              ╰─────────╯",
+	}, "\n")
+	pic, err := reader.Read(drawing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pic.Frames) != 1 || pic.Frames[0].Title != "Build [x]" {
+		t.Fatalf("frames: %+v", pic.Frames)
+	}
+	f := pic.Frames[0]
+	inside := 0
+	for _, b := range pic.Boxes {
+		if f.Contains(b.X, b.Y) {
+			inside++
+		}
+	}
+	if len(pic.Boxes) != 3 || inside != 1 || len(pic.Edges) != 2 {
+		t.Errorf("boxes %d, %d inside; edges %+v", len(pic.Boxes), inside, pic.Edges)
+	}
+}

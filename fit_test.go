@@ -239,3 +239,16 @@ func TestAStackedWayStaysBelowWhatMovesOverIt(t *testing.T) {
 		t.Errorf("spec %+v is not a lane below watching %+v", spec, watching)
 	}
 }
+
+// A flow kept the way the reader chose is never turned to fit.
+func TestKeepOrientationNeverTurnsTheFlow(t *testing.T) {
+	d := chain(8)
+	turned := d.Layout(cligram.WithOrientation(cligram.TopToBottom), cligram.Fit(200, 3))
+	kept := d.Layout(cligram.WithOrientation(cligram.TopToBottom), cligram.KeepOrientation(), cligram.Fit(200, 3))
+	if turned.Orientation() != cligram.LeftToRight {
+		t.Fatalf("Fit did not turn a tall chain in a wide room: %v", turned.Orientation())
+	}
+	if kept.Orientation() != cligram.TopToBottom {
+		t.Errorf("kept the flow %v", kept.Orientation())
+	}
+}

@@ -275,6 +275,17 @@ const examples = [
   review --> ok{Approved?}
   ok -->|changes| fix
   ok -->|yes| merge([Merge])` },
+  { name: "Pipeline (subgraphs)", source: `flowchart LR
+  push([Push]) --> lint
+  subgraph build [Build]
+    lint[Lint] --> compile[Compile] --> unit[Unit tests]
+  end
+  subgraph release [Release]
+    stage[Deploy to staging] --> smoke{Smoke tests pass?}
+    smoke -->|yes| prod([Deploy to production])
+  end
+  unit --> stage
+  smoke -.->|no| lint` },
   { name: "Factory loop", source: `---
 title: Factory loop
 ---
@@ -303,6 +314,14 @@ flowchart LR
   left -->|yes| call
   left -->|no| fail([Give up])
   status -->|4xx| fail` },
+  { name: "Order (state diagram)", source: `stateDiagram-v2
+  [*] --> Draft
+  Draft --> Review : submit
+  state Approved <<choice>>
+  Review --> Approved
+  Approved --> Shipped : yes
+  Approved --> Draft : changes
+  Shipped --> [*]` },
   { name: "Release (YAML)", source: `title: Release
 nodes:
   triage: Triage

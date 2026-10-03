@@ -28,10 +28,16 @@ type Glyphs struct {
 	// Lines are edge glyphs by the directions they join, a mask of
 	// north, east, south and west.
 	Lines [16]string
+	// Dashed and Thick are a dashed and a thick line's straight runs,
+	// across and down; their corners and junctions are Lines'.
+	Dashed, Thick [2]string
 	// Arrows are arrowheads pointing up, right, down and left.
 	Arrows [4]string
 	// Boxes are the borders of each kind of node.
 	Boxes map[Kind]Borders
+	// Frame is the border of a group's frame: unlike any box's, so a
+	// frame is never read as a box.
+	Frame Borders
 	// Markers show a node's status in front of its text, so status reads
 	// without color too. Every marker is as wide as every other.
 	Markers map[Status]string
@@ -62,6 +68,8 @@ var Unicode = &Glyphs{
 		east | south | west:         "┬",
 		north | east | south | west: "┼",
 	},
+	Dashed: [2]string{"┄", "┆"},
+	Thick:  [2]string{"━", "┃"},
 	Arrows: [4]string{"▲", "►", "▼", "◄"},
 	Boxes: map[Kind]Borders{
 		Step: {
@@ -79,6 +87,10 @@ var Unicode = &Glyphs{
 			Horizontal: "━", Vertical: "┃",
 			OutTop: "┷", OutBottom: "┯", OutLeft: "┨", OutRight: "┠",
 		},
+	},
+	Frame: Borders{
+		TopLeft: "╭", TopRight: "╮", BottomLeft: "╰", BottomRight: "╯",
+		Horizontal: "╌", Vertical: "╎",
 	},
 	Markers: map[Status]string{
 		Idle:    " ",
@@ -113,6 +125,8 @@ var ASCII = &Glyphs{
 		east | south | west:         "+",
 		north | east | south | west: "+",
 	},
+	Dashed: [2]string{".", ":"},
+	Thick:  [2]string{"=", "|"},
 	Arrows: [4]string{"^", ">", "v", "<"},
 	Boxes: map[Kind]Borders{
 		Step: {
@@ -130,6 +144,10 @@ var ASCII = &Glyphs{
 			Horizontal: "-", Vertical: "|",
 			OutTop: "+", OutBottom: "+", OutLeft: "+", OutRight: "+",
 		},
+	},
+	Frame: Borders{
+		TopLeft: ".", TopRight: ".", BottomLeft: "'", BottomRight: "'",
+		Horizontal: ".", Vertical: ":",
 	},
 	Markers: map[Status]string{
 		Idle:    " ",

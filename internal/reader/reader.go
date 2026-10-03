@@ -107,9 +107,15 @@ func opposite(b uint8) uint8 {
 // lines are the line glyphs and the ways they lead.
 var lines = map[string]uint8{
 	"│": n | s, "─": e | w,
+	"┆": n | s, "┄": e | w, // dashed
+	"┃": n | s, "━": e | w, // thick
 	"└": n | e, "┘": n | w, "┌": e | s, "┐": s | w,
 	"├": n | e | s, "┤": n | s | w, "┬": e | s | w, "┴": n | e | w, "┼": n | e | s | w,
 }
+
+// styles are the glyphs that show a line's style; a line with none of
+// them is solid.
+var styles = map[string]string{"┆": "dashed", "┄": "dashed", "┃": "thick", "━": "thick"}
 
 // arrows are the arrowheads, by the way they point.
 var arrows = map[string]uint8{"▲": n, "►": e, "▼": s, "◄": w}
@@ -147,15 +153,17 @@ type Edge struct {
 	From, To int
 	Label    string // "" for none
 	ArrowSGR string // how its arrowhead was colored
+	Style    string // solid, dashed or thick
 	ArrowX   int
 	ArrowY   int
 }
 
 // Picture is what a drawing shows.
 type Picture struct {
-	Grid  *Grid
-	Boxes []Box
-	Edges []Edge
+	Grid   *Grid
+	Boxes  []Box
+	Edges  []Edge
+	Frames []Frame
 }
 
 // Text is a box's text as one string, lines joined by spaces.
@@ -165,12 +173,13 @@ func (b Box) Text() string { return strings.Join(b.Lines, " ") }
 // a broken box, a line that ends in nothing, a line from two boxes at
 // once, a label that belongs to no edge or to several.
 func Read(text string) (*Picture, error) {
-	r := &read{g: Parse(text), owner: map[pt]int{}, port: map[pt]uint8{}}
+	r := &read{g: Parse(text), owner: map[pt]int{}, port: map[pt]uint8{}, frameCell: map[pt]bool{}}
+	r.frames()
 	r.boxes()
 	r.labels()
 	r.lines()
 	r.trace()
-	return &Picture{Grid: r.g, Boxes: r.out, Edges: r.edges}, errors.Join(r.errs...)
+	return &Picture{Grid: r.g, Boxes: r.out, Edges: r.edges, Frames: r.frameList}, errors.Join(r.errs...)
 }
 
 type pt struct{ x, y int }
@@ -189,6 +198,10 @@ type read struct {
 	lbls  []label
 	edges []Edge
 	errs  []error
+	// frameCell are the cells of frames, title included, but not where a
+	// line crosses one.
+	frameCell map[pt]bool
+	frameList []Frame
 }
 
 func (r *read) fail(format string, args ...any) { r.errs = append(r.errs, fmt.Errorf(format, args...)) }
@@ -208,7 +221,7 @@ func (r *read) boxes() {
 	for y := 0; y < r.g.H; y++ {
 		for x := 0; x < len(r.g.Cells[y]); x++ {
 			for _, f := range families {
-				if r.g.at(x, y).G == f.tl {
+				if r.g.at(x, y).G == f.tl && !r.frameCell[pt{x, y}] {
 					if _, taken := r.owner[pt{x, y}]; !taken {
 						r.box(x, y, f)
 					}
@@ -345,7 +358,7 @@ func (r *read) labels() {
 			if c.Cont {
 				continue
 			}
-			if _, inBox := r.owner[pt{x, y}]; inBox {
+			if _, inBox := r.owner[pt{x, y}]; inBox || r.frameCell[pt{x, y}] {
 				row.WriteString("\x00")
 				cellOf = append(cellOf, x)
 				continue
@@ -380,6 +393,9 @@ func (r *read) lines() {
 			if _, ok := r.label[p]; ok {
 				continue
 			}
+			if r.frameCell[p] {
+				continue
+			}
 			if c.Cont || c.G == " " || c.G == "" {
 				continue
 			}
@@ -403,6 +419,9 @@ func (r *read) mask(p pt) uint8 {
 		return 0
 	}
 	if _, inLabel := r.label[p]; inLabel {
+		return 0
+	}
+	if r.frameCell[p] {
 		return 0
 	}
 	return lines[r.g.at(p.x, p.y).G]
@@ -564,6 +583,17 @@ func (r *read) trace() {
 	for p := range parent {
 		roots[find(p)] = true
 	}
+	// A network's style is in the glyphs of its straight runs.
+	style := map[pt]string{}
+	for p := range parent {
+		if st, ok := styles[r.g.at(p.x, p.y).G]; ok && r.mask(p) != 0 {
+			root := find(p)
+			if was, ok := style[root]; ok && was != st {
+				r.fail("a line at (%d,%d) is both %s and %s", p.x, p.y, was, st)
+			}
+			style[root] = st
+		}
+	}
 	for root := range roots {
 		from := sources[root]
 		switch {
@@ -583,7 +613,11 @@ func (r *read) trace() {
 		}
 		for _, sk := range ends[root] {
 			c := r.g.at(sk.at.x, sk.at.y)
-			r.edges = append(r.edges, Edge{From: src, To: sk.box, ArrowSGR: c.SGR, ArrowX: sk.at.x, ArrowY: sk.at.y})
+			st := style[root]
+			if st == "" {
+				st = "solid"
+			}
+			r.edges = append(r.edges, Edge{From: src, To: sk.box, ArrowSGR: c.SGR, ArrowX: sk.at.x, ArrowY: sk.at.y, Style: st})
 		}
 	}
 

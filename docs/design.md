@@ -140,5 +140,14 @@ for the 19-step factory loop.
   `► ▲ ▼ ◄`, which never do, and are large enough to see in common fonts
   (the small `▸ ▴ ▾ ◂` are a few pixels). Markers are `▸ ✓ ✗ ◔`. `▲ ▼`
   are ambiguous-width like box drawing, so there is an ASCII glyph set.
+- Dashed (`┄ ┆`) and thick (`━ ┃`) edges show their style on straight
+  runs only; corners and junctions stay light, since heavy corners are an
+  end box's. Edges of different styles from one node never share a trunk,
+  or the dashed one would show no dashes.
+- A group is a frame, `╭╌ Title ╌╮` and `╎`, unlike any box. It is laid
+  out round its nodes after each solve; a node that is not in it but lands
+  in it, and frames side by side that meet, are kept apart as boxes are,
+  by putting one side's nodes wholly before the other's. Lines cross a
+  frame's border straight, never along it, never by a corner or the title.
 - Every box keeps a cell for its status marker whatever the status, so a
   box never changes size as a run moves through it.

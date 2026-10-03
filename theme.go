@@ -40,12 +40,14 @@ func (s Status) String() string {
 type Part int
 
 const (
-	PartBorder Part = iota // a node's border
-	PartText               // a node's text
-	PartMarker             // a node's status marker
-	PartLine               // an edge's line
-	PartArrow              // an edge's arrowhead
-	PartLabel              // an edge's label
+	PartBorder     Part = iota // a node's border
+	PartText                   // a node's text
+	PartMarker                 // a node's status marker
+	PartLine                   // an edge's line
+	PartArrow                  // an edge's arrowhead
+	PartLabel                  // an edge's label
+	PartFrame                  // a group's frame
+	PartFrameTitle             // a group's title, in its frame
 )
 
 func (p Part) String() string {
@@ -62,6 +64,10 @@ func (p Part) String() string {
 		return "arrow"
 	case PartLabel:
 		return "label"
+	case PartFrame:
+		return "frame"
+	case PartFrameTitle:
+		return "frame title"
 	}
 	return fmt.Sprintf("Part(%d)", int(p))
 }
@@ -75,6 +81,8 @@ type Style struct {
 	// Kind and Class are the node's, on a node's cells.
 	Kind  Kind
 	Class string
+	// Line is the edge's line style, on its line's cells.
+	Line LineStyle
 }
 
 // Theme colors the picture. Paint is called with runs of cells that share
@@ -224,6 +232,10 @@ func paletteSGR(st Style, status, class, line, label string) string {
 		return bold(status)
 	case PartMarker:
 		return status
+	case PartFrame:
+		return line // a frame is in the background, as lines not taken are
+	case PartFrameTitle:
+		return "1"
 	case PartBorder:
 		color := status
 		if color == "" {

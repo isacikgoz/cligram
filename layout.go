@@ -21,7 +21,9 @@ type LayoutOption func(*layoutConfig)
 type layoutConfig struct {
 	glyphs *Glyphs
 	orient Orientation
-	limits Limits
+	// keepOrient keeps Fit from turning the flow.
+	keepOrient bool
+	limits     Limits
 	// compact closes the gaps nothing asked to be wider down to tight.
 	compact bool
 	// fit, when set, is the room there is.
@@ -51,6 +53,13 @@ func WithOrientation(o Orientation) LayoutOption {
 	return func(c *layoutConfig) { c.orient = o }
 }
 
+// KeepOrientation keeps Fit from turning the flow the other way, for a
+// reader who chose which way it reads: it compacts, wraps and narrows
+// text only.
+func KeepOrientation() LayoutOption {
+	return func(c *layoutConfig) { c.keepOrient = true }
+}
+
 // Layout is a diagram with every node given a place. It is computed once
 // for a diagram and a size, and painted as often as the state changes:
 // painting never moves a box.
@@ -65,6 +74,7 @@ type Layout struct {
 	edges    []Edge
 	routes   []route
 	warnings []error
+	frames   []frame // the groups, drawn round their nodes
 }
 
 type placed struct {
@@ -102,6 +112,9 @@ func (l *Layout) Render(st State, t Theme) string {
 // paint paints the picture in state st.
 func (l *Layout) paint(st State) *canvas {
 	c := newCanvas(l.W, l.H, l.glyphs)
+	for _, f := range l.frames {
+		c.groupFrame(f.rect, l.frameTitle(f.group))
+	}
 	for _, p := range l.nodes {
 		c.box(p.rect, p.node.Sub != nil, p.lines, Style{
 			Kind: p.node.Kind, Class: p.node.Class, Status: st.Status[p.node.ID], Focus: st.Focus == p.node.ID,
@@ -117,7 +130,9 @@ func (l *Layout) paint(st State) *canvas {
 			if rt.path == nil || taken[rt.edge.Ref()] != last {
 				continue
 			}
-			c.path(rt.path, rt.group, edgeStyle(last), true)
+			st := edgeStyle(last)
+			st.Line = rt.edge.Line
+			c.path(rt.path, rt.group, st, true)
 		}
 	}
 	for _, rt := range l.routes {
@@ -214,6 +229,7 @@ func (d *Diagram) place(cfg layoutConfig) *Layout {
 			l.edges = append(l.edges, e)
 		}
 	}
+	l.layFrames(d)
 	// Wrapping: while a step reaches past the room there is, the flow
 	// wraps at it and is laid out again. Each round wraps one more step,
 	// so it ends.
@@ -277,6 +293,11 @@ func (l *Layout) frame() {
 		r.X, r.Y = r.X+routeMargin, r.Y+routeMargin
 		grow(r.X, r.Y, r.X+r.W-1, r.Y+r.H-1)
 	}
+	for i := range l.frames {
+		r := &l.frames[i].rect
+		r.X, r.Y = r.X+routeMargin, r.Y+routeMargin
+		grow(r.X, r.Y, r.X+r.W-1, r.Y+r.H-1)
+	}
 	for _, rt := range l.routes {
 		for _, p := range rt.path {
 			grow(p.X, p.Y, p.X, p.Y)
@@ -292,6 +313,10 @@ func (l *Layout) frame() {
 	}
 	for i := range l.nodes {
 		r := &l.nodes[i].rect
+		r.X, r.Y = r.X-minX, r.Y-minY
+	}
+	for i := range l.frames {
+		r := &l.frames[i].rect
 		r.X, r.Y = r.X-minX, r.Y-minY
 	}
 	for i := range l.routes {
@@ -358,6 +383,9 @@ type layouter struct {
 	dir    []int
 	band   []int
 	parent []int
+	// frameTries counts how many times each node and frame, or two
+	// frames, were kept apart.
+	frameTries map[[2]int]int
 	// stacks are the further ways on auto stacks below the ones before,
 	// and stacked the pairs (t, c) it has put c below t for.
 	stacks  []stack
@@ -409,6 +437,7 @@ func newLayouter(l *Layout, cfg layoutConfig) *layouter {
 	y.parent = make([]int, n)
 	y.breaks = map[int]bool{}
 	y.touching = map[[2]int]bool{}
+	y.frameTries = map[[2]int]int{}
 	y.pad = make([]int, n)
 	for i, p := range l.nodes {
 		y.pad[i] = cfg.pad[p.node.ID]
@@ -815,8 +844,11 @@ func (y *layouter) solve() {
 			r := &y.l.nodes[i].rect
 			r.X, r.Y = pos[axisX][i]+y.pad[i], pos[axisY][i]+y.pad[i]
 		}
-		// What a stacked way shares columns with may have changed.
+		// What a stacked way shares columns with may have changed; and
+		// frames are round their nodes as they are now, nothing else in.
 		moved := y.restack(pos[y.main])
+		y.frameRects()
+		moved = y.outsiders() || moved
 		for a := range n {
 			for b := a + 1; b < n; b++ {
 				ra, rb := y.box(a), y.box(b)
@@ -984,12 +1016,21 @@ func (y *layouter) normalize() {
 		return
 	}
 	l.W, l.H = 0, 0
+	y.frameRects()
 	minX, minY := l.nodes[0].rect.X, l.nodes[0].rect.Y
 	for _, p := range l.nodes {
 		minX, minY = min(minX, p.rect.X), min(minY, p.rect.Y)
 	}
+	for _, f := range l.frames {
+		minX, minY = min(minX, f.rect.X), min(minY, f.rect.Y)
+	}
 	for i := range l.nodes {
 		r := &l.nodes[i].rect
+		r.X, r.Y = r.X-minX, r.Y-minY
+		l.W, l.H = max(l.W, r.X+r.W), max(l.H, r.Y+r.H)
+	}
+	for i := range l.frames {
+		r := &l.frames[i].rect
 		r.X, r.Y = r.X-minX, r.Y-minY
 		l.W, l.H = max(l.W, r.X+r.W), max(l.H, r.Y+r.H)
 	}

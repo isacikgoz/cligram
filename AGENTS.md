@@ -12,12 +12,16 @@ relative placement when you want to say where things go.
 - `github.com/isacikgoz/cligram/yaml`: reads a diagram from YAML, with
   errors that give a line.
 - `github.com/isacikgoz/cligram/mermaid`: reads a Mermaid flowchart
-  (`flowchart`/`graph`, any direction). Shapes map to kinds (`{}` decision,
+  (`flowchart`/`graph`, any direction; subgraphs are groups) or state
+  diagram (`stateDiagram-v2`: `[*]` is Start and End, `<<choice>>` a
+  decision, a composite a frame after its box). Shapes map to kinds (`{}` decision,
   `([])` and `(())` end, the rest steps); styles, `click` and subgraph
   frames are read and left out.
 - `cmd/cligram`: draws Mermaid or YAML from a file or stdin. `-json` writes
-  the drawing, size, fit and warnings; `cligram mcp` serves a `draw` tool
-  over MCP on stdio. The README's examples are checked by its tests.
+  the drawing, size, fit and warnings; `cligram md` prints Markdown with
+  its mermaid flowchart blocks drawn; `cligram watch flow.mmd` shows it
+  live from events on stdin (`build active`, `build -> test`, or JSON;
+  `internal/watch`); `cligram mcp` serves a `draw` tool over MCP on stdio. The README's examples are checked by its tests.
 - `internal/draw`: reads a source and draws it; the one way the command,
   its MCP server and the playground draw.
 - `playground/`: the browser playground, cligram built to WebAssembly in a
@@ -71,8 +75,9 @@ snippets below are compiled there and in `bubble/example_test.go` too.
 | Piece | What it is |
 |---|---|
 | `Diagram` | Nodes and edges, built in any order. Mistakes are collected, not returned per call: `d.Check()` lists them all. |
-| `Node(id, text, opts...)` | `As(Decision)` / `As(Terminal)` (default `Step`), `At("right of x")`, `Class("human")`, `Sub(loader)`. Text breaks on `"\n"`; empty text shows the id. |
-| `Edge(from, to, opts...)` | `Label("yes")`, `From(cligram.Right)`, `To(cligram.Top)`. Edges between the same nodes are told apart by label (`EdgeRef{From, To, Label}`). |
+| `Node(id, text, opts...)` | `As(Decision)` / `As(Terminal)` (default `Step`), `At("right of x")`, `Class("human")`, `In("group")`, `Sub(loader)`. Text breaks on `"\n"`; empty text shows the id. |
+| `Group(id, title, opts...)` | A titled frame round the nodes put `In` it; `Inside("parent")` nests it. No other node is in a frame, and frames side by side keep apart. |
+| `Edge(from, to, opts...)` | `Label("yes")`, `Line(cligram.Dashed)` or `Line(cligram.Thick)`, `From(cligram.Right)`, `To(cligram.Top)`. Edges between the same nodes are told apart by label (`EdgeRef{From, To, Label}`). |
 | `Layout(opts...)` | Places every node and routes every edge. Never fails: `l.Warnings()` lists mistakes and placements it had to leave out. |
 | `Render(State, Theme)` | Paints the layout. Never moves a box, so repaint freely. |
 | `State` | `Status` per node (`Idle`, `Active`, `Done`, `Failed`, `Waiting`), the edges `Taken`, the node in `Focus`. Focus is view state, not part of the diagram. |
@@ -201,6 +206,13 @@ make fuzz     # random diagrams, every drawing read back (FUZZTIME=2m)
 make pixels   # render in a real terminal engine, check the pixels (needs Node)
 make serve    # the browser playground on localhost:8418
 ```
+
+A tag `v*` releases (`.github/workflows/release.yml`, `.goreleaser.yaml`):
+binaries for macOS, Linux and Windows, and a Homebrew cask pushed to
+`isacikgoz/homebrew-tap`, which needs that repository and a
+`HOMEBREW_TAP_GITHUB_TOKEN` secret that may push to it. Try a release
+without publishing: `go run github.com/goreleaser/goreleaser/v2@v2.18.2
+release --snapshot --clean`.
 
 CI (`.github/workflows/ci.yml`) runs all of it on every push: tests on the
 oldest Go `go.mod` allows and the newest, with and without `-race`; lint;

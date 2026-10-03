@@ -10,7 +10,8 @@
 //	  ready -->|no| fix[Fix it]:::agent
 //	  fix --> ready
 //
-// It reads the flowchart subset that maps onto cligram:
+// It also reads state diagrams (stateDiagram-v2); see state.go. Of
+// flowcharts it reads the subset that maps onto cligram:
 //
 //   - shapes: [text], (text), [[text]], [(text)], >text], [/text/] and
 //     [\text\] are steps; {text} and {{text}} decisions; ([text]) and
@@ -19,8 +20,8 @@
 //     label as -->|label| or -- label -->; chains (a --> b --> c) and
 //     groups (a & b --> c).
 //   - flowchart (or graph) TD, TB, LR, RL or BT; a front matter title;
-//     node:::class and "class a,b name" for classes; subgraphs, whose
-//     nodes join the flow; %% comments.
+//     node:::class and "class a,b name" for classes; subgraphs, drawn
+//     as titled frames, nested too; %% comments.
 //
 // Styling (style, classDef, linkStyle) and interaction (click) are
 // ignored. Anything else is an error that gives its line.
@@ -44,8 +45,9 @@ type Doc struct {
 	Options []cligram.LayoutOption
 }
 
-// Is reports whether text looks like a Mermaid flowchart: its first line
-// that is not front matter or a comment starts one.
+// Is reports whether text looks like a Mermaid flowchart or state
+// diagram: its first line that is not front matter or a comment starts
+// one.
 func Is(text string) bool {
 	_, rest := frontMatter(text)
 	for _, line := range strings.Split(rest, "\n") {
@@ -54,7 +56,7 @@ func Is(text string) bool {
 			if stmt == "" || strings.HasPrefix(stmt, "%%") {
 				continue
 			}
-			return header.MatchString(stmt)
+			return header.MatchString(stmt) || isState(stmt)
 		}
 	}
 	return false
@@ -88,7 +90,8 @@ type node struct {
 	id, text string
 	kind     cligram.Kind
 	class    string
-	defined  bool // given a shape and text, not only named
+	defined  bool   // given a shape and text, not only named
+	group    string // the subgraph it is last named inside
 }
 
 type parser struct {
@@ -99,11 +102,16 @@ type parser struct {
 	classes map[string]string // node id to class, from class lines
 	errs    []error
 	line    int
+	// groups are the subgraphs, in order; open those not yet ended,
+	// innermost last.
+	groups []cligram.Group
+	open   []string
 }
 
 type edge struct {
 	from, to, label string
 	line            int
+	style           cligram.LineStyle
 }
 
 // Parse reads a diagram from a flowchart.
@@ -119,6 +127,9 @@ func Parse(data []byte) (*Doc, error) {
 				continue
 			}
 			if !seenHeader {
+				if isState(stmt) {
+					return parseState(title, text, i+1)
+				}
 				m := header.FindStringSubmatch(stmt)
 				if m == nil {
 					p.fail("a flowchart starts with \"flowchart LR\" or \"flowchart TD\", not %q", stmt)
@@ -139,6 +150,17 @@ func Parse(data []byte) (*Doc, error) {
 	if len(p.order) == 0 {
 		p.errs = append(p.errs, errors.New("the flowchart has no nodes"))
 	}
+	return p.finish()
+}
+
+// finish builds the diagram from what was read, or says what is wrong.
+func (p *parser) finish() (*Doc, error) {
+	if len(p.open) > 0 {
+		p.errs = append(p.errs, fmt.Errorf("subgraph %q is not closed with end", p.open[len(p.open)-1]))
+	}
+	for _, g := range p.groups {
+		p.doc.Diagram.Group(g.ID, g.Title, cligram.Inside(g.Parent))
+	}
 	if err := errors.Join(p.errs...); err != nil {
 		return nil, err
 	}
@@ -157,6 +179,9 @@ func Parse(data []byte) (*Doc, error) {
 		if class != "" {
 			opts = append(opts, cligram.Class(class))
 		}
+		if n.group != "" {
+			opts = append(opts, cligram.In(n.group))
+		}
 		d.Node(id, text, opts...)
 	}
 	seen := map[cligram.EdgeRef]bool{}
@@ -166,7 +191,7 @@ func Parse(data []byte) (*Doc, error) {
 			continue // Mermaid draws a link written twice once
 		}
 		seen[ref] = true
-		d.Edge(e.from, e.to, cligram.Label(e.label))
+		d.Edge(e.from, e.to, cligram.Label(e.label), cligram.Line(e.style))
 	}
 	if err := d.Check(); err != nil {
 		return nil, err
@@ -214,19 +239,29 @@ var (
 	plain = regexp.MustCompile(`^<?(?:-\.+->|-\.+-|-{2,}[>xo]|-{3,}|={2,}>|={3,})(?:\s*\|([^|]*)\|)?`)
 )
 
-// link reads a link from the front of *s, giving its label.
-func link(s *string) (string, bool) {
+// link reads a link from the front of *s, giving its label and how its
+// line is drawn: -.-> dashed, ==> thick.
+func link(s *string) (string, cligram.LineStyle, bool) {
+	style := func(m string) cligram.LineStyle {
+		switch {
+		case strings.HasPrefix(strings.TrimPrefix(m, "<"), "-."):
+			return cligram.Dashed
+		case strings.HasPrefix(strings.TrimPrefix(m, "<"), "=="):
+			return cligram.Thick
+		}
+		return cligram.Solid
+	}
 	for _, re := range labelled {
 		if m := re.FindStringSubmatch(*s); m != nil {
 			*s = (*s)[len(m[0]):]
-			return strings.TrimSpace(m[1]), true
+			return strings.TrimSpace(m[1]), style(m[0]), true
 		}
 	}
 	if m := plain.FindStringSubmatch(*s); m != nil {
 		*s = (*s)[len(m[0]):]
-		return strings.TrimSpace(m[1]), true
+		return strings.TrimSpace(m[1]), style(m[0]), true
 	}
-	return "", false
+	return "", cligram.Solid, false
 }
 
 // readID reads a node id from the front of s: letters, digits, _ and .,
@@ -251,8 +286,16 @@ func readID(s string) string {
 
 func (p *parser) statement(s string) {
 	switch {
-	case subgraphRe.MatchString(s) || s == "end":
-		return // a subgraph's nodes join the flow
+	case subgraphRe.MatchString(s):
+		p.subgraph(strings.TrimSpace(strings.TrimPrefix(s, "subgraph")))
+		return
+	case s == "end":
+		if len(p.open) == 0 {
+			p.fail("an end closes no subgraph")
+			return
+		}
+		p.open = p.open[:len(p.open)-1]
+		return
 	case ignored.MatchString(s):
 		return
 	}
@@ -272,7 +315,7 @@ func (p *parser) statement(s string) {
 		if rest == "" {
 			return
 		}
-		label, ok := link(&rest)
+		label, style, ok := link(&rest)
 		if !ok {
 			p.fail("expected a link such as --> after the node, found %q", rest)
 			return
@@ -284,12 +327,41 @@ func (p *parser) statement(s string) {
 		}
 		for _, from := range prev {
 			for _, to := range next {
-				p.edges = append(p.edges, edge{from, to, label, p.line})
+				p.edges = append(p.edges, edge{from, to, label, p.line, style})
 			}
 		}
 		prev = next
 	}
 }
+
+// subgraph opens a subgraph: "id [Title]", "id", "Title words" or
+// "\"Title\"", inside the one open, if any.
+func (p *parser) subgraph(rest string) {
+	id, title := rest, rest
+	if m := subgraphTitled.FindStringSubmatch(rest); m != nil {
+		id, title = m[1], unquote(strings.TrimSpace(m[2]))
+	} else if q := unquote(rest); q != rest {
+		id, title = q, q
+	}
+	if id == "" {
+		p.fail("a subgraph needs an id or a title")
+		return
+	}
+	g := cligram.Group{ID: id, Title: title}
+	if len(p.open) > 0 {
+		g.Parent = p.open[len(p.open)-1]
+	}
+	for _, have := range p.groups {
+		if have.ID == id {
+			p.fail("subgraph %q is opened twice", id)
+			return
+		}
+	}
+	p.groups = append(p.groups, g)
+	p.open = append(p.open, id)
+}
+
+var subgraphTitled = regexp.MustCompile(`^([\w.-]+)\s*\[(.*)\]$`)
 
 // group reads one node, or several joined by &, from the front of *s.
 func (p *parser) group(s *string) ([]string, bool) {
@@ -343,6 +415,11 @@ func (p *parser) node(s *string) (string, bool) {
 		n = &node{id: id}
 		p.nodes[id] = n
 		p.order = append(p.order, id)
+	}
+	// As in Mermaid, a node is in the subgraph it is last named inside,
+	// wherever it was named first.
+	if len(p.open) > 0 {
+		n.group = p.open[len(p.open)-1]
 	}
 	for _, sh := range shapes {
 		if !strings.HasPrefix(*s, sh.open) {

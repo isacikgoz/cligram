@@ -15,6 +15,8 @@ a run moves through them.
 ## Use it
 
 ```sh
+brew install isacikgoz/tap/cligram
+# or a binary from https://github.com/isacikgoz/cligram/releases, or
 go install github.com/isacikgoz/cligram/cmd/cligram@latest
 ```
 
@@ -36,8 +38,19 @@ EOF
 ┗━━━━━━━━┛  ╰────────╯  ╰─────────────╯  ╚═════════╝              ┗━━━━━━━━━━┛
 ```
 
-It also reads cligram's YAML (see [examples/release.yaml](examples/release.yaml)),
-and without `-width` fits the terminal it prints to.
+Without `-width` it fits the terminal it prints to. Subgraphs draw as
+titled frames. It reads state diagrams (`stateDiagram-v2`) too, and cligram's YAML ([examples/release.yaml](examples/release.yaml)), and `cligram md
+README.md` prints Markdown with its mermaid blocks drawn.
+
+`cligram watch` shows a run live: pipe it events, one a line.
+
+![A release pipeline drawn by cligram watch as a run moves through it](docs/demo.gif)
+
+```sh
+(echo "build active"
+ if make >build.log 2>&1; then echo "build done"; else echo "build failed"; fi
+) | cligram watch flow.mmd
+```
 
 ## From Go
 

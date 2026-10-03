@@ -1,0 +1,57 @@
+# Releases are built by GoReleaser when a tag v* is pushed
+# (.github/workflows/release.yml): binaries for macOS, Linux and Windows,
+# their checksums, and a Homebrew cask in isacikgoz/homebrew-tap.
+#
+# Try it without publishing: go run github.com/goreleaser/goreleaser/v2@v2.18.2 release --snapshot --clean
+version: 2
+
+project_name: cligram
+
+builds:
+  - id: cligram
+    main: ./cmd/cligram
+    binary: cligram
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: cligram
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+
+homebrew_casks:
+  - name: cligram
+    repository:
+      owner: isacikgoz
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://isacikgoz.me/cligram/
+    description: Mermaid flowcharts, drawn in your terminal
+    license: MIT
+    binaries: [cligram]
+    hooks:
+      post:
+        # The binaries are not notarized: let macOS run them.
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cligram"]
+          end

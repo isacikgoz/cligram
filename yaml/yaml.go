@@ -7,10 +7,14 @@
 //	  ready:
 //	    text: Ready to ship?
 //	    kind: decision           # step (the default), decision or end
-//	  ship: { text: Ship it, class: human, at: right of ready }
+//	  ship: { text: Ship it, class: human, at: right of ready, group: release }
+//	groups:                      # frames round some nodes
+//	  release: Release           # an id and its title
+//	  checks: { title: Checks, in: release }   # inside another
 //	edges:
 //	  - triage -> ready          # an edge
 //	  - ready -> ship: yes       # an edge and its label
+//	  - ship -.-> triage         # dashed; ==> is thick
 //
 // Nodes keep the order they are written in, which is the order a flow is
 // laid out in. Every mistake is reported with its line.
@@ -49,7 +53,7 @@ func Parse(data []byte) (*Doc, error) {
 		return nil, at(top, "a diagram is a mapping of title, orientation, nodes and edges")
 	}
 	var errs []error
-	var nodes, edges *goyaml.Node
+	var nodes, edges, groups *goyaml.Node
 	for i := 0; i+1 < len(top.Content); i += 2 {
 		key, val := top.Content[i], top.Content[i+1]
 		switch key.Value {
@@ -67,14 +71,19 @@ func Parse(data []byte) (*Doc, error) {
 			nodes = val
 		case "edges":
 			edges = val
+		case "groups":
+			groups = val
 		default:
-			errs = append(errs, at(key, "%q is not a key of a diagram: use title, orientation, nodes or edges", key.Value))
+			errs = append(errs, at(key, "%q is not a key of a diagram: use title, orientation, nodes, edges or groups", key.Value))
 		}
 	}
 	if nodes == nil {
 		return nil, at(top, "a diagram needs nodes")
 	}
 	ids := map[string]bool{}
+	if groups != nil {
+		errs = append(errs, readGroups(doc.Diagram, groups)...)
+	}
 	errs = append(errs, readNodes(doc.Diagram, nodes, ids)...)
 	if edges != nil {
 		errs = append(errs, readEdges(doc.Diagram, edges, ids)...)
@@ -129,6 +138,8 @@ func readNodes(d *cligram.Diagram, nodes *goyaml.Node, ids map[string]bool) []er
 				opts = append(opts, cligram.As(kind))
 			case "class":
 				opts = append(opts, cligram.Class(v.Value))
+			case "group":
+				opts = append(opts, cligram.In(v.Value))
 			case "at":
 				if _, err := cligram.ParsePlacement(v.Value); err != nil {
 					errs = append(errs, at(v, "%v", err))
@@ -136,10 +147,41 @@ func readNodes(d *cligram.Diagram, nodes *goyaml.Node, ids map[string]bool) []er
 				}
 				opts = append(opts, cligram.At(v.Value))
 			default:
-				errs = append(errs, at(k, "%q is not a key of a node: use text, kind, class or at", k.Value))
+				errs = append(errs, at(k, "%q is not a key of a node: use text, kind, class, at or group", k.Value))
 			}
 		}
 		d.Node(id, text, opts...)
+	}
+	return errs
+}
+
+func readGroups(d *cligram.Diagram, groups *goyaml.Node) []error {
+	if groups.Kind != goyaml.MappingNode {
+		return []error{at(groups, "groups are a mapping of ids to titles or to title and in")}
+	}
+	var errs []error
+	for i := 0; i+1 < len(groups.Content); i += 2 {
+		key, val := groups.Content[i], groups.Content[i+1]
+		switch val.Kind {
+		case goyaml.ScalarNode:
+			d.Group(key.Value, val.Value)
+		case goyaml.MappingNode:
+			var title, parent string
+			for j := 0; j+1 < len(val.Content); j += 2 {
+				k, v := val.Content[j], val.Content[j+1]
+				switch k.Value {
+				case "title":
+					title = v.Value
+				case "in":
+					parent = v.Value
+				default:
+					errs = append(errs, at(k, "%q is not a key of a group: use title or in", k.Value))
+				}
+			}
+			d.Group(key.Value, title, cligram.Inside(parent))
+		default:
+			errs = append(errs, at(val, "group %q is a title or a mapping of title and in", key.Value))
+		}
 	}
 	return errs
 }
@@ -157,7 +199,17 @@ func readEdges(d *cligram.Diagram, edges *goyaml.Node, ids map[string]bool) []er
 			errs = append(errs, at(item, `an edge is "a -> b", or "a -> b: label"`))
 			continue
 		}
-		from, to, ok := strings.Cut(spec, "->")
+		// The arrow says how the line is drawn: -.-> dashed, ==> thick.
+		from, to, ok, line := "", "", false, cligram.Solid
+		for _, a := range []struct {
+			arrow string
+			line  cligram.LineStyle
+		}{{"-.->", cligram.Dashed}, {"==>", cligram.Thick}, {"->", cligram.Solid}} {
+			if from, to, ok = strings.Cut(spec, a.arrow); ok {
+				line = a.line
+				break
+			}
+		}
 		from, to = strings.TrimSpace(from), strings.TrimSpace(to)
 		if !ok || from == "" || to == "" {
 			errs = append(errs, at(where, `%q is not an edge: write "a -> b"`, spec))
@@ -171,7 +223,7 @@ func readEdges(d *cligram.Diagram, edges *goyaml.Node, ids map[string]bool) []er
 			}
 		}
 		if !bad {
-			d.Edge(from, to, cligram.Label(label))
+			d.Edge(from, to, cligram.Label(label), cligram.Line(line))
 		}
 	}
 	return errs

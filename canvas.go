@@ -32,6 +32,12 @@ type cell struct {
 	// lines of different groups cross.
 	lines uint8
 	group int
+	// line is the style of the lines through it: solid where lines of
+	// different styles meet.
+	line LineStyle
+	// frame is the frame border glyph the cell shows when nothing else
+	// is drawn in it.
+	frame string
 	// border is the side of a box this cell is the border of, if any, and
 	// kind the kind of that box. Corners have no side.
 	border Side
@@ -189,7 +195,7 @@ func (c *canvas) path(pts []Point, group int, st Style, arrow bool) {
 		}
 	}
 
-	line := Style{Part: PartLine, Status: st.Status}
+	line := Style{Part: PartLine, Status: st.Status, Line: st.Line}
 	for _, p := range order {
 		if !c.in(p.X, p.Y) {
 			continue
@@ -207,9 +213,14 @@ func (c *canvas) path(pts []Point, group int, st Style, arrow bool) {
 		case crosses(here.lines, m):
 			// A straight line across another, even one of its own group's
 			// branches, crosses it: the one drawn last passes over.
-			here.lines = m
+			here.lines, here.line = m, st.Line
+		case here.lines == 0:
+			here.lines, here.line = m, st.Line
 		default:
 			here.lines |= m
+			if here.line != st.Line {
+				here.line = Solid // a trunk shared by different styles
+			}
 		}
 		here.group, here.style, here.styled = group, line, true
 	}
@@ -221,6 +232,43 @@ func (c *canvas) path(pts []Point, group int, st Style, arrow bool) {
 			c.put(end.X, end.Y, head, 1, Style{Part: PartArrow, Status: st.Status})
 		}
 	}
+}
+
+// lineGlyph is the glyph for a cell's lines: a dashed or thick line's
+// straight runs in their own glyphs, everything else a solid line's.
+func (c *canvas) lineGlyph(cl cell) string {
+	runs := map[LineStyle][2]string{Dashed: c.glyphs.Dashed, Thick: c.glyphs.Thick}[cl.line]
+	switch {
+	case cl.line == Solid || cl.lines == 0:
+	case cl.lines&^(east|west) == 0 && runs[0] != "":
+		return runs[0]
+	case cl.lines&^(north|south) == 0 && runs[1] != "":
+		return runs[1]
+	}
+	return c.glyphs.Lines[cl.lines]
+}
+
+// groupFrame draws a group's frame round r, its title in the top border.
+func (c *canvas) groupFrame(r Rect, title string) {
+	b := c.glyphs.Frame
+	set := func(x, y int, g string) {
+		if c.in(x, y) {
+			c.at(x, y).frame = g
+		}
+	}
+	for x := r.X + 1; x < r.X+r.W-1; x++ {
+		set(x, r.Y, b.Horizontal)
+		set(x, r.Y+r.H-1, b.Horizontal)
+	}
+	for y := r.Y + 1; y < r.Y+r.H-1; y++ {
+		set(r.X, y, b.Vertical)
+		set(r.X+r.W-1, y, b.Vertical)
+	}
+	set(r.X, r.Y, b.TopLeft)
+	set(r.X+r.W-1, r.Y, b.TopRight)
+	set(r.X, r.Y+r.H-1, b.BottomLeft)
+	set(r.X+r.W-1, r.Y+r.H-1, b.BottomRight)
+	c.text(r.X+2, r.Y, " "+title+" ", Style{Part: PartFrameTitle}, r.W-4)
 }
 
 // leave shows a line leaving a box through its border.
@@ -308,7 +356,7 @@ func (c *canvas) renderRect(t Theme, r Rect) string {
 			}
 		}
 		end := len(row) - 1
-		for end >= 0 && row[end].g == "" && row[end].lines == 0 && !row[end].cont {
+		for end >= 0 && row[end].g == "" && row[end].lines == 0 && row[end].frame == "" && !row[end].cont {
 			end--
 		}
 		var run strings.Builder
@@ -332,7 +380,10 @@ func (c *canvas) renderRect(t Theme, r Rect) string {
 			}
 			g := cl.g
 			if g == "" {
-				g = c.glyphs.Lines[cl.lines]
+				g = c.lineGlyph(cl)
+			}
+			if g == "" && cl.frame != "" {
+				g, cl.style, cl.styled = cl.frame, Style{Part: PartFrame}, true
 			}
 			styled := cl.styled && g != ""
 			if g == "" {

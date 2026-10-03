@@ -20,3 +20,16 @@ func Routes(l *Layout) []string {
 	}
 	return out
 }
+
+// Searched is how many states route searches have taken off their queues
+// so far, all layouts together.
+func Searched() int64 { return searched.Load() }
+
+// Frames describes a layout's frames.
+func Frames(l *Layout) []string {
+	var out []string
+	for _, f := range l.frames {
+		out = append(out, fmt.Sprintf("%s %+v members=%v", f.group.ID, f.rect, f.members))
+	}
+	return out
+}

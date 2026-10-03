@@ -6,3 +6,7 @@
 
 # go test -cpuprofile leaves the test binary behind
 *.test
+
+# goreleaser builds releases here
+/dist/
+/docs/demo/cligram
