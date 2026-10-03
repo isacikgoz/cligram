@@ -256,7 +256,6 @@ dialog h2 { margin: 0; font: 600 15px var(--sans); display: flex; justify-conten
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script>
-<script src="wasm_exec.js"></script>
 <script>
 "use strict";
 
@@ -418,11 +417,15 @@ term.loadAddon(fit);
 term.loadAddon(new Unicode11Addon.Unicode11Addon());
 term.unicode.activeVersion = "11";
 
-let ready = false;
+// Drawing happens in a worker, one request at a time: while one is drawn,
+// a newer one waits, and only the latest is drawn next; an answer to a
+// request older than the last asked is dropped.
+const worker = new Worker("worker.js");
+let ready = false, busy = false, waiting = null, asked = 0;
 
 function draw() {
   if (!ready) return;
-  const request = {
+  const request = JSON.stringify({
     Source: src.value,
     Format: "auto",
     Width: Math.max(term.cols - 1, 20),
@@ -430,8 +433,31 @@ function draw() {
     ASCII: $("ascii").checked,
     Color: $("color").checked,
     Orientation: orientation(),
-  };
-  const r = JSON.parse(cligramDraw(JSON.stringify(request)));
+  });
+  asked++;
+  waiting = { seq: asked, request };
+  send();
+}
+function send() {
+  if (busy || !waiting) return;
+  busy = true;
+  worker.postMessage(waiting);
+  waiting = null;
+}
+let firstDrawn;
+const drawn = new Promise((resolve) => { firstDrawn = resolve; });
+worker.onmessage = (e) => {
+  busy = false;
+  if (e.data.error) {
+    $("loading").textContent = "cligram could not load: " + e.data.error;
+    return;
+  }
+  if (e.data.seq === asked) show(JSON.parse(e.data.result));
+  firstDrawn();
+  send();
+};
+
+function show(r) {
   term.reset();
   term.write("\x1b[?25l");
   notes.replaceChildren();
@@ -541,13 +567,10 @@ async function start() {
   } catch {}
   fit.fit();
 
-  const go = new Go();
-  const wasm = await WebAssembly.instantiateStreaming(fetch("cligram.wasm"), go.importObject);
-  go.run(wasm.instance);
-  while (typeof globalThis.cligramDraw !== "function") await new Promise((r) => setTimeout(r, 10));
-  $("loading").remove();
   ready = true;
   draw();
+  await drawn;
+  $("loading").remove();
 }
 start().catch((err) => {
   $("loading").textContent = "cligram could not load: " + err.message;

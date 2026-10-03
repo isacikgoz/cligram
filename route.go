@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"sync"
 )
 
 // Edges are routed one at a time on the cell grid, around the boxes, with
@@ -112,15 +113,50 @@ type router struct {
 	// off are the cells of labels off the grid, where no line goes but a
 	// loop's label may.
 	off    map[Point]bool
-	search search
+	search *search
+	// before and after are the grid as it was, kept to go back to: a
+	// label's retries need two, and reuse their room.
+	before, after snapshot
+	// portBuf is room for portsOf's ports, reused.
+	portBuf []port
+}
+
+// routers keeps routers between routings: Fit routes a diagram many
+// times, each on a grid of its own, and grids and search tables made
+// afresh each time cost more than the searches do. A router reused is
+// cleared; its search tables hold entries of searches before, which their
+// generation stamps tell apart.
+var routers = sync.Pool{New: func() any { return &router{search: new(search)} }}
+
+// cleared is s, n long and all zero, reusing s's room.
+func cleared[T any](s []T, n int) []T {
+	if cap(s) < n {
+		return make([]T, n)
+	}
+	s = s[:n]
+	clear(s)
+	return s
+}
+
+// emptied is m, empty, reusing it.
+func emptied[K comparable, V any](m map[K]V) map[K]V {
+	if m == nil {
+		return map[K]V{}
+	}
+	clear(m)
+	return m
 }
 
 func newRouter(l *Layout, o Orientation) *router {
 	w, h := l.W+2*routeMargin, l.H+2*routeMargin
-	r := &router{l: l, orient: o, w: w, h: h,
-		box: make([]int, w*h), lines: make([]uint8, w*h), group: make([]int, w*h),
-		uses: make([]int, w*h), blocked: make([]bool, w*h), label: make([]bool, w*h), sole: make([]bool, w*h),
-		xlines: make([]uint8, w*h), xgroup: make([]int, w*h), ports: map[int]int{}, off: map[Point]bool{}, drawn: map[int]bool{}}
+	n := w * h
+	r := routers.Get().(*router)
+	r.l, r.orient, r.w, r.h, r.unbroken = l, o, w, h, false
+	r.box, r.lines, r.group, r.uses = cleared(r.box, n), cleared(r.lines, n), cleared(r.group, n), cleared(r.uses, n)
+	r.blocked, r.label, r.sole = cleared(r.blocked, n), cleared(r.label, n), cleared(r.sole, n)
+	r.xlines, r.xgroup, r.frame = cleared(r.xlines, n), cleared(r.xgroup, n), cleared(r.frame, n)
+	r.ports, r.off, r.drawn = emptied(r.ports), emptied(r.off), emptied(r.drawn)
+	r.search.tables(n)
 	for i, p := range l.nodes {
 		b := r.grid(p.rect)
 		for y := b.Y; y < b.Y+b.H; y++ {
@@ -129,7 +165,6 @@ func newRouter(l *Layout, o Orientation) *router {
 			}
 		}
 	}
-	r.frame = make([]uint8, w*h)
 	for _, f := range l.frames {
 		b := r.grid(f.rect)
 		mark := func(x, y int, m uint8) {
@@ -241,7 +276,9 @@ func routeAll(l *Layout, o Orientation, ell string, lim Limits) ([]route, []erro
 		for i, e := range l.edges {
 			routes[i] = route{edge: e, group: groups[key{e.From, e.Line}], label: cut(e.Label, lim.LabelWidth, ell)}
 		}
-		failed, lost, warns := newRouter(l, o).routeIn(routes, order)
+		r := newRouter(l, o)
+		failed, lost, warns := r.routeIn(routes, order)
+		r.done()
 		improved := bestFailed < 0 || len(failed) < bestFailed
 		if improved || (len(failed) == bestFailed && lost < bestLost) {
 			best, bestWarns, bestFailed, bestLost = routes, warns, len(failed), lost
@@ -278,7 +315,7 @@ func (r *router) routeIn(routes []route, order []int) (failed []int, lost int, w
 		}
 		var before *snapshot
 		if rt.label != "" {
-			before = r.save()
+			before = r.save(&r.before)
 		}
 		r.commit(cells, rt.group)
 		rt.path = r.corners(cells)
@@ -298,7 +335,7 @@ func (r *router) routeIn(routes []route, order []int) (failed []int, lost int, w
 			// fits there.
 			// Failing that, avoid crossing lines too, which cut the
 			// stretches a label needs.
-			after := r.save()
+			after := r.save(&r.after)
 			placed := false
 			for _, try := range retries(rt.edge) {
 				r.restore(before)
@@ -378,13 +415,13 @@ type snapshot struct {
 	off                  map[Point]bool
 }
 
-func (r *router) save() *snapshot {
-	return &snapshot{
-		lines: slices.Clone(r.lines), xlines: slices.Clone(r.xlines),
-		group: slices.Clone(r.group), uses: slices.Clone(r.uses), xgroup: slices.Clone(r.xgroup),
-		blocked: slices.Clone(r.blocked), label: slices.Clone(r.label), sole: slices.Clone(r.sole),
-		ports: maps.Clone(r.ports), off: maps.Clone(r.off),
-	}
+// save keeps the grid as it is in s, reusing s's room, and gives s.
+func (r *router) save(s *snapshot) *snapshot {
+	s.lines, s.xlines = append(s.lines[:0], r.lines...), append(s.xlines[:0], r.xlines...)
+	s.group, s.uses, s.xgroup = append(s.group[:0], r.group...), append(s.uses[:0], r.uses...), append(s.xgroup[:0], r.xgroup...)
+	s.blocked, s.label, s.sole = append(s.blocked[:0], r.blocked...), append(s.label[:0], r.label...), append(s.sole[:0], r.sole...)
+	s.ports, s.off = refill(s.ports, r.ports), refill(s.off, r.off)
+	return s
 }
 
 func (r *router) restore(s *snapshot) {
@@ -396,8 +433,23 @@ func (r *router) restore(s *snapshot) {
 	copy(r.blocked, s.blocked)
 	copy(r.label, s.label)
 	copy(r.sole, s.sole)
-	r.ports = maps.Clone(s.ports)
-	r.off = maps.Clone(s.off)
+	r.ports, r.off = refill(r.ports, s.ports), refill(r.off, s.off)
+}
+
+// refill makes dst hold what src does, reusing dst.
+func refill[K comparable, V any](dst, src map[K]V) map[K]V {
+	if dst == nil {
+		return maps.Clone(src)
+	}
+	clear(dst)
+	maps.Copy(dst, src)
+	return dst
+}
+
+// done gives the router back, for the next routing to reuse.
+func (r *router) done() {
+	r.l = nil
+	routers.Put(r)
 }
 
 func abs(n int) int {

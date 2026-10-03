@@ -154,8 +154,9 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.w, a.h = msg.Width, msg.Height
-		a.diagram = a.diagram.SetSize(msg.Width, msg.Height-1)
-		return a, nil
+		var cmd tea.Cmd
+		a.diagram, cmd = a.diagram.Resize(msg.Width, msg.Height-1)
+		return a, cmd
 	case tea.KeyMsg:
 		if msg.String() == "q" || msg.String() == "ctrl+c" {
 			return a, tea.Quit

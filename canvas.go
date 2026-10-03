@@ -2,6 +2,7 @@ package cligram
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/rivo/uniseg"
 )
@@ -18,7 +19,16 @@ type canvas struct {
 	w, h   int
 	cells  []cell
 	glyphs *Glyphs
+	// Room reused from one painting to the next: a row being written out,
+	// and a path's cells and the lines through them.
+	row   []cell
+	masks map[Point]uint8
+	order []Point
 }
+
+// canvases keeps canvases between paintings: a picture repainted at a
+// screen's frame rate would otherwise make one a frame for the collector.
+var canvases = sync.Pool{New: func() any { return new(canvas) }}
 
 type cell struct {
 	// g is what the cell shows; empty, it shows its lines, or nothing.
@@ -45,7 +55,16 @@ type cell struct {
 }
 
 func newCanvas(w, h int, g *Glyphs) *canvas {
-	return &canvas{w: w, h: h, cells: make([]cell, w*h), glyphs: g}
+	c := canvases.Get().(*canvas)
+	c.w, c.h, c.glyphs = w, h, g
+	c.cells = cleared(c.cells, w*h)
+	return c
+}
+
+// release gives the canvas back, for the next painting.
+func (c *canvas) release() {
+	c.glyphs = nil
+	canvases.Put(c)
 }
 
 func (c *canvas) in(x, y int) bool { return x >= 0 && y >= 0 && x < c.w && y < c.h }
@@ -174,14 +193,15 @@ func (c *canvas) path(pts []Point, group int, st Style, arrow bool) {
 	if len(pts) < 2 {
 		return
 	}
-	masks := map[Point]uint8{}
-	var order []Point
+	masks := emptied(c.masks)
+	order := c.order[:0]
 	add := func(p Point, m uint8) {
 		if _, ok := masks[p]; !ok {
 			order = append(order, p)
 		}
 		masks[p] |= m
 	}
+	defer func() { c.masks, c.order = masks, order }()
 	for i := 1; i < len(pts); i++ {
 		a, b := pts[i-1], pts[i]
 		dx, dy := sign(b.X-a.X), sign(b.Y-a.Y)
@@ -337,24 +357,29 @@ func (c *canvas) render(t Theme) string { return c.renderRect(t, Rect{0, 0, c.w,
 // grapheme cut in half by r's sides shows as a blank.
 func (c *canvas) renderRect(t Theme, r Rect) string {
 	var out strings.Builder
+	out.Grow(r.W * r.H * 4) // most cells are a 1-3 byte glyph; color adds some
 	for y := r.Y; y < r.Y+r.H; y++ {
-		var row []cell
+		row := c.row[:0]
 		if y >= 0 && y < c.h {
+			// Cells left of the picture shift the row; none are drawn.
+			if r.X < 0 {
+				for range min(-r.X, r.W) {
+					row = append(row, cell{})
+				}
+			}
 			from, to := max(r.X, 0), min(r.X+r.W, c.w)
 			if from < to {
-				row = append([]cell(nil), c.cells[y*c.w+from:y*c.w+to]...)
-				if row[0].cont {
-					row[0] = cell{}
+				start := len(row)
+				row = append(row, c.cells[y*c.w+from:y*c.w+to]...)
+				if row[start].cont {
+					row[start] = cell{}
 				}
 				if last := len(row) - 1; !row[last].cont && to < c.w && c.cells[y*c.w+to].cont {
 					row[last] = cell{}
 				}
 			}
-			// Cells left of the picture shift the row; none are drawn.
-			if r.X < 0 {
-				row = append(make([]cell, min(-r.X, r.W)), row...)
-			}
 		}
+		c.row = row
 		end := len(row) - 1
 		for end >= 0 && row[end].g == "" && row[end].lines == 0 && row[end].frame == "" && !row[end].cont {
 			end--

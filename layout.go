@@ -105,7 +105,9 @@ type State struct {
 
 // Render paints the layout in state st, colored by t.
 func (l *Layout) Render(st State, t Theme) string {
-	return l.paint(st).render(t)
+	c := l.paint(st)
+	defer c.release()
+	return c.render(t)
 }
 
 // paint paints the picture in state st.

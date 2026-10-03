@@ -37,7 +37,7 @@ pixels:
 playground:
 	rm -rf playground/dist && mkdir -p playground/dist
 	GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w" -o playground/dist/cligram.wasm ./playground
-	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" playground/index.html playground/dist/
+	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" playground/index.html playground/worker.js playground/dist/
 
 # serve builds the playground and serves it on http://localhost:$(PORT).
 PORT ?= 8418

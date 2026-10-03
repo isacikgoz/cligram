@@ -14,7 +14,8 @@ func (r *router) portsOf(i int, pinned Side, leaving bool) []port {
 	p := r.l.nodes[i]
 	b := r.grid(p.rect)
 	stacked := p.node.Sub != nil
-	var out []port
+	// Its callers are done with the ports before they ask again.
+	out := r.portBuf[:0]
 	add := func(s Side, x0, y0, x1, y1 int) {
 		if pinned != Auto && s != pinned {
 			return
@@ -39,6 +40,7 @@ func (r *router) portsOf(i int, pinned Side, leaving bool) []port {
 		add(Right, x1, b.Y+1, x1, y1-1)
 		add(Bottom, b.X+1, y1, x1-1, y1)
 	}
+	r.portBuf = out
 	return out
 }
 

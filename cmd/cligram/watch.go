@@ -236,8 +236,9 @@ func (m watching) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w = msg.Width
-		m.view = m.view.SetSize(msg.Width, msg.Height-1)
-		return m, nil
+		var cmd tea.Cmd
+		m.view, cmd = m.view.Resize(msg.Width, msg.Height-1)
+		return m, cmd
 	case tea.KeyMsg:
 		if msg.String() == "q" || msg.String() == "ctrl+c" {
 			return m, tea.Quit

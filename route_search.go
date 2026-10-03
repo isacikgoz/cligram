@@ -30,6 +30,26 @@ func (r *router) unstate(s int) (cell, dir, run int, split bool) {
 	return s / 4, s % 4, run, split
 }
 
+// tables makes q's tables fit a grid of cells cells, reusing what it has.
+func (q *search) tables(cells int) {
+	grow32 := func(s []uint32, n int) []uint32 {
+		if cap(s) < n {
+			return make([]uint32, n)
+		}
+		return s[:n]
+	}
+	growI := func(s []int32, n int) []int32 {
+		if cap(s) < n {
+			return make([]int32, n)
+		}
+		return s[:n]
+	}
+	n := cells * 4 * runs * 2
+	q.stamp, q.best, q.prev, q.start = grow32(q.stamp, n), growI(q.best, n), growI(q.prev, n), growI(q.start, n)
+	q.goalGen, q.goalCost = grow32(q.goalGen, cells*4), growI(q.goalCost, cells*4)
+	q.landing = grow32(q.landing, cells)
+}
+
 type search struct {
 	gen      uint32
 	stamp    []uint32 // states seen this generation
@@ -149,13 +169,7 @@ func (r *router) findIn(e Edge, group int, w Rect) ([]int, bool) {
 	inWindow := func(x, y int) bool {
 		return r.in(x, y) && x >= w.X && y >= w.Y && x < w.X+w.W && y < w.Y+w.H
 	}
-	q := &r.search
-	if q.stamp == nil {
-		n := r.w * r.h * 4 * runs * 2
-		q.stamp, q.best, q.prev, q.start = make([]uint32, n), make([]int32, n), make([]int32, n), make([]int32, n)
-		q.goalGen, q.goalCost = make([]uint32, r.w*r.h*4), make([]int32, r.w*r.h*4)
-		q.landing = make([]uint32, r.w*r.h)
-	}
+	q := r.search
 	q.gen++
 	q.reset()
 

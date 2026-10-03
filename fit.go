@@ -225,5 +225,7 @@ func reveal(pos, n, at, m int) int {
 
 // RenderView paints the cells of the picture in view, as Render would.
 func (l *Layout) RenderView(st State, t Theme, view Rect) string {
-	return l.paint(st).renderRect(t, view)
+	c := l.paint(st)
+	defer c.release()
+	return c.renderRect(t, view)
 }

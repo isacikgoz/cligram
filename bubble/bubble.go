@@ -115,6 +115,16 @@ type frame struct {
 	follow bool
 	// history is where Next came from, for Back.
 	history []string
+	// laying is set while a layout for it is made in the background.
+	laying bool
+}
+
+// laidOutMsg brings a layout made in the background, for the room it was
+// made for.
+type laidOutMsg struct {
+	f    *frame
+	w, h int
+	l    *cligram.Layout
 }
 
 // New shows d, titled title, with nothing yet known about a run.
@@ -188,6 +198,61 @@ func (m Model) SetSize(w, h int) Model {
 	return m
 }
 
+// Resize gives the component w columns and h rows, as SetSize does, but
+// lays out again in the background: until the new layout comes, the one
+// there is is shown in the new room. A terminal being resized then
+// repaints at once, whatever laying out a big diagram takes. While one
+// layout is made, further sizes only wait for it: the next is made for the
+// latest size. The host passes the command on, as for any Bubble Tea
+// command.
+func (m Model) Resize(w, h int) (Model, tea.Cmd) {
+	if w == m.w && h == m.h {
+		return m, nil
+	}
+	if m.w == 0 && m.h == 0 {
+		return m.SetSize(w, h), nil // the first size: there is nothing to show till then
+	}
+	m.w, m.h = w, h
+	var cmds []tea.Cmd
+	for _, f := range m.frames {
+		cmds = append(cmds, m.layLater(f))
+	}
+	return m, tea.Batch(cmds...)
+}
+
+// layLater lays f out for the room there is in the background, unless a
+// layout for it is being made already; with none to show yet, at once.
+func (m Model) layLater(f *frame) tea.Cmd {
+	if f.l == nil {
+		m.lay(f)
+		return nil
+	}
+	if f.laying {
+		return nil // the one being made brings us back for the latest size
+	}
+	f.laying = true
+	w, h := m.room()
+	d, opts := f.d, append(slices.Clone(m.layout), cligram.Fit(w, h))
+	return func() tea.Msg { return laidOutMsg{f: f, w: w, h: h, l: d.Layout(opts...)} }
+}
+
+// laidOut shows a layout made in the background, and makes the next if
+// the room changed since.
+func (m Model) laidOut(msg laidOutMsg) (Model, tea.Cmd) {
+	f := msg.f
+	f.laying = false
+	if !slices.Contains(m.frames, f) {
+		return m, nil // closed meanwhile
+	}
+	w, h := m.room()
+	f.l = msg.l
+	f.view = f.l.Reveal(cligram.Rect{X: f.view.X, Y: f.view.Y, W: w, H: h}, f.focus)
+	if msg.w != w || msg.h != h {
+		return m, m.layLater(f)
+	}
+	return m, nil
+}
+
 // Path is the diagram shown: the nodes opened from the root to reach it.
 func (m Model) Path() []string { return slices.Clone(m.top().path) }
 
@@ -197,7 +262,8 @@ func (m Model) Focus() string { return m.top().focus }
 // Init does nothing; the host sends the size and the state.
 func (m Model) Init() tea.Cmd { return nil }
 
-// Update handles keys, StateMsg and diagrams that finished loading.
+// Update handles keys, StateMsg, diagrams that finished loading and
+// layouts made in the background.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -206,6 +272,8 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m.setState(msg)
 	case loadedMsg:
 		return m.loaded(msg)
+	case laidOutMsg:
+		return m.laidOut(msg)
 	}
 	return m, nil
 }
