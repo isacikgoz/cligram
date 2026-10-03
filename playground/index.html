@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>cligram playground</title>
+<meta name="description" content="Paste a Mermaid flowchart and see it drawn as text, the way cligram draws it in a terminal.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<style>
+/* Layout: a toolbar, then the source on the left and the terminal it is
+   drawn in on the right; stacked on a phone. The terminal is always dark,
+   as terminals are; the chrome around it follows the viewer's theme. */
+:root {
+  --bg: #f5f7f7;
+  --panel: #ffffff;
+  --fg: #182224;
+  --muted: #5b6b6e;
+  --line: #d6dfe0;
+  --accent: #0a8f8c;
+  --accent-fg: #ffffff;
+  --bad: #b3261e;
+  --warn: #8a5a00;
+  --term: #0f1416;
+  --term-fg: #d8e1e3;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b1011; --panel: #121a1c; --fg: #dbe5e6; --muted: #8a9b9e; --line: #233033;
+    --accent: #3cc6c1; --accent-fg: #062221; --bad: #ff8a80; --warn: #e2b04a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0b1011; --panel: #121a1c; --fg: #dbe5e6; --muted: #8a9b9e; --line: #233033;
+  --accent: #3cc6c1; --accent-fg: #062221; --bad: #ff8a80; --warn: #e2b04a;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 var(--sans);
+  display: flex; flex-direction: column; padding-inline: 16px; padding-block: 12px 16px; gap: 12px;
+}
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
+h1 { font: 600 18px/1.2 var(--mono); margin: 0; letter-spacing: -0.01em; }
+h1 span { color: var(--accent); }
+header p { margin: 0; color: var(--muted); flex: 1 1 280px; min-width: 0; }
+header a { color: var(--accent); }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.bar label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+select, button {
+  font: 500 13px var(--sans); color: var(--fg); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; cursor: pointer;
+}
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+select:focus-visible, button:focus-visible, textarea:focus-visible, input:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.grow { flex: 1; }
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(260px, 2fr) 3fr; gap: 12px; }
+.pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+.pane h2 {
+  margin: 0; font: 600 11px/1 var(--sans); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted);
+  display: flex; justify-content: space-between; gap: 8px;
+}
+.pane h2 output { font: 500 12px var(--mono); text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+textarea {
+  flex: 1; min-height: 240px; resize: none; width: 100%; padding: 12px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--fg);
+  font: 13px/1.55 var(--mono); tab-size: 2; white-space: pre; overflow: auto;
+  /* Show what was typed: no --> drawn as one long arrow. */
+  font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0;
+}
+#screen {
+  flex: 1; min-height: 300px; border-radius: 8px; background: var(--term); padding: 10px 0 10px 12px;
+  overflow: hidden; position: relative;
+}
+#screen .xterm { height: 100%; }
+#loading {
+  position: absolute; inset: 0; display: grid; place-items: center; color: var(--term-fg);
+  font: 13px var(--mono); background: var(--term);
+}
+#notes { margin: 0; padding: 0; list-style: none; font: 12.5px/1.5 var(--mono); min-height: 1.5em; }
+#notes li.error { color: var(--bad); }
+#notes li.warning { color: var(--warn); }
+#notes li.ok { color: var(--muted); }
+.copied { color: var(--accent); font-size: 13px; }
+@media (max-width: 760px) {
+  main { grid-template-columns: 1fr; }
+  textarea { min-height: 200px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>cligram <span>playground</span></h1>
+  <p>Write a Mermaid flowchart or cligram YAML; the terminal shows what <code>cligram</code> prints at its size. <a href="https://github.com/isacikgoz/cligram">GitHub</a></p>
+</header>
+
+<div class="bar" role="toolbar" aria-label="Drawing options">
+  <label for="example">Example
+    <select id="example"></select>
+  </label>
+  <label for="orient">Reads
+    <select id="orient">
+      <option value="">as written</option>
+      <option value="across">left to right</option>
+      <option value="down">top to bottom</option>
+    </select>
+  </label>
+  <label for="fitHeight"><input type="checkbox" id="fitHeight"> Fit the height too</label>
+  <label for="color"><input type="checkbox" id="color" checked> Color</label>
+  <label for="ascii"><input type="checkbox" id="ascii"> ASCII only</label>
+  <span class="grow"></span>
+  <span class="copied" id="copied" hidden>Link copied</span>
+  <button class="primary" id="share" type="button">Copy link</button>
+</div>
+
+<main>
+  <section class="pane">
+    <h2><span>Source</span></h2>
+    <textarea id="src" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="Diagram source"></textarea>
+  </section>
+  <section class="pane">
+    <h2><span>Terminal</span><output id="size" aria-live="polite"></output></h2>
+    <div id="screen"><div id="loading">Loading cligram…</div></div>
+    <ul id="notes" aria-live="polite"></ul>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script>
+<script src="wasm_exec.js"></script>
+<script>
+"use strict";
+
+const examples = [
+  { name: "Agent loop", source: `flowchart LR
+  task([Task]) --> plan[Plan] --> act[Run tools]
+  act --> check{Done?}
+  check -->|no| plan
+  check -->|yes| done([Answer])` },
+  { name: "Pull request", source: `flowchart LR
+  open([PR opened]) --> ci[CI runs]
+  ci --> green{Checks pass?}
+  green -->|no| fix[Push a fix]
+  fix --> ci
+  green -->|yes| review[Code review]
+  review --> ok{Approved?}
+  ok -->|changes| fix
+  ok -->|yes| merge([Merge])` },
+  { name: "Factory loop", source: `---
+title: Factory loop
+---
+flowchart LR
+  triage[Triage agent runs]:::agent --> outcome{Triage<br>outcome}
+  outcome -->|automatable| impl[Implementation<br>agent runs]:::agent
+  outcome -->|needs specs| spec[Spec agent runs]:::agent
+  outcome -->|needs human| human[Human provides input]:::human
+  outcome -->|park| park([Park issue for now])
+  spec --> specreview{Human review specs}:::human
+  specreview -->|approved| impl
+  specreview -->|needs revision| spec
+  human --> triage
+  impl --> review[Code review<br>agent runs]:::agent --> verify[Verification<br>agent runs]:::agent
+  verify --> ready{Ready to ship?}:::human
+  ready -->|yes| ship[Ship it] --> monitor[Monitoring<br>agent runs]:::agent
+  ready -->|not ready| impl
+  monitor --> issue{Issue<br>detected}
+  issue -->|yes| create[Create issue] --> triage
+  issue -->|no| watching([Continue<br>monitoring])` },
+  { name: "Retry with backoff", source: `flowchart TD
+  call[Call the API] --> status{Status?}
+  status -->|2xx| done([Done])
+  status -->|429 or 5xx| wait[Wait and back off]
+  wait --> left{Tries left?}
+  left -->|yes| call
+  left -->|no| fail([Give up])
+  status -->|4xx| fail` },
+  { name: "Release (YAML)", source: `title: Release
+nodes:
+  triage: Triage
+  ready:
+    text: Ready to ship?
+    kind: decision
+  ship: { text: Ship it, kind: end }
+  fix: { text: Fix it, class: agent }
+edges:
+  - triage -> ready
+  - ready -> ship: yes
+  - ready -> fix: no
+  - fix -> ready` },
+];
+
+const $ = (id) => document.getElementById(id);
+const src = $("src"), notes = $("notes"), size = $("size");
+
+for (const [i, e] of examples.entries()) {
+  const o = document.createElement("option");
+  o.value = String(i);
+  o.textContent = e.name;
+  $("example").append(o);
+}
+
+// The share link carries the source in the URL's hash, deflated and in
+// base64url, so a link is the whole diagram and no server keeps anything.
+async function pack(text) {
+  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+  const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+async function unpack(code) {
+  const bin = atob(code.replaceAll("-", "+").replaceAll("_", "/"));
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return await new Response(stream).text();
+}
+
+const term = new Terminal({
+  allowProposedApi: true, // for the Unicode 11 widths cligram measures with
+  convertEol: true,
+  disableStdin: true,
+  cursorStyle: "bar",
+  cursorInactiveStyle: "none",
+  scrollback: 5000,
+  fontFamily: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
+  fontSize: 13,
+  lineHeight: 1,
+  theme: { background: "#0f1416", foreground: "#d8e1e3", cursor: "#0f1416" },
+});
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+term.loadAddon(new Unicode11Addon.Unicode11Addon());
+term.unicode.activeVersion = "11";
+
+let ready = false;
+
+function draw() {
+  if (!ready) return;
+  const request = {
+    Source: src.value,
+    Format: "auto",
+    Width: Math.max(term.cols - 1, 20),
+    Height: $("fitHeight").checked ? term.rows : 0,
+    ASCII: $("ascii").checked,
+    Color: $("color").checked,
+    Orientation: $("orient").value,
+  };
+  const r = JSON.parse(cligramDraw(JSON.stringify(request)));
+  term.reset();
+  term.write("\x1b[?25l");
+  notes.replaceChildren();
+  if (r.error) {
+    size.textContent = "";
+    for (const line of r.error.split("\n")) note("error", line);
+    return;
+  }
+  term.write((r.title ? r.title + "\n\n" : "") + r.drawing);
+  term.scrollToTop();
+  size.textContent = `${r.width}×${r.height}` + (r.fits ? " · fits" : ` · scrolls in ${term.cols}×${term.rows}`);
+  if (r.warnings.length === 0) note("ok", "Every node, edge and label is drawn.");
+  for (const w of r.warnings) note("warning", w);
+}
+function note(kind, text) {
+  const li = document.createElement("li");
+  li.className = kind;
+  li.textContent = text;
+  notes.append(li);
+}
+
+let timer = 0;
+function later() { clearTimeout(timer); timer = setTimeout(draw, 120); }
+
+src.addEventListener("input", later);
+for (const id of ["orient", "fitHeight", "color", "ascii"]) $(id).addEventListener("change", draw);
+$("example").addEventListener("change", (e) => {
+  src.value = examples[Number(e.target.value)].source;
+  history.replaceState(null, "", location.pathname);
+  draw();
+});
+$("share").addEventListener("click", async () => {
+  const url = location.origin + location.pathname + "#" + (await pack(src.value));
+  history.replaceState(null, "", url);
+  try {
+    await navigator.clipboard.writeText(url);
+    $("copied").hidden = false;
+    setTimeout(() => { $("copied").hidden = true; }, 1600);
+  } catch {
+    prompt("Copy this link", url);
+  }
+});
+
+let resizing = 0;
+new ResizeObserver(() => {
+  clearTimeout(resizing);
+  resizing = setTimeout(() => {
+    const before = term.cols + "x" + term.rows;
+    fit.fit();
+    if (term.cols + "x" + term.rows !== before) draw();
+  }, 60);
+}).observe($("screen"));
+
+async function start() {
+  src.value = examples[0].source;
+  if (location.hash.length > 1) {
+    try {
+      src.value = await unpack(location.hash.slice(1));
+      const o = document.createElement("option");
+      o.value = "";
+      o.textContent = "From a link";
+      o.disabled = true;
+      $("example").prepend(o);
+      $("example").value = "";
+    } catch {
+      note("error", "The link's diagram could not be read; showing an example instead.");
+    }
+  }
+  await document.fonts.load('13px "JetBrains Mono"');
+  term.open($("screen"));
+  // Glyphs drawn cell by cell on the GPU, as terminals like kitty and
+  // WezTerm draw them; the DOM renderer is the fallback.
+  try {
+    const webgl = new WebglAddon.WebglAddon();
+    webgl.onContextLoss(() => webgl.dispose());
+    term.loadAddon(webgl);
+  } catch {}
+  fit.fit();
+
+  const go = new Go();
+  const wasm = await WebAssembly.instantiateStreaming(fetch("cligram.wasm"), go.importObject);
+  go.run(wasm.instance);
+  while (typeof globalThis.cligramDraw !== "function") await new Promise((r) => setTimeout(r, 10));
+  $("loading").remove();
+  ready = true;
+  draw();
+}
+start().catch((err) => {
+  $("loading").textContent = "cligram could not load: " + err.message;
+});
+</script>
+</body>
+</html>

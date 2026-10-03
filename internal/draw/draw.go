@@ -1,4 +1,6 @@
-package main
+// Package draw reads a diagram, as a Mermaid flowchart or YAML, and draws
+// it: the one way the command, its MCP server and the playground draw.
+package draw
 
 import (
 	"errors"
@@ -10,19 +12,20 @@ import (
 	"github.com/isacikgoz/cligram/yaml"
 )
 
-// request is what to draw, and how: the same for the command and for its
-// MCP tool.
-type request struct {
+// Request is what to draw, and how.
+type Request struct {
 	Source string
 	// Format is yaml, mermaid, or auto: a Mermaid flowchart if it starts
 	// as one, YAML otherwise.
 	Format        string
 	Width, Height int // 0: as wide or tall as it takes
 	ASCII, Color  bool
+	// Orientation is across or down, or empty for what the source says.
+	Orientation string
 }
 
-// drawing is what was drawn.
-type drawing struct {
+// Drawing is what was drawn.
+type Drawing struct {
 	Title    string   `json:"title,omitempty"`
 	Text     string   `json:"drawing"`
 	Width    int      `json:"width"`
@@ -32,8 +35,8 @@ type drawing struct {
 	Warnings []string `json:"warnings"`
 }
 
-// draw reads r's source and draws it.
-func draw(r request) (*drawing, error) {
+// Draw reads r's source and draws it.
+func Draw(r Request) (*Drawing, error) {
 	format := r.Format
 	switch format {
 	case "", "auto":
@@ -67,6 +70,15 @@ func draw(r request) (*drawing, error) {
 		title, d, opts = doc.Title, doc.Diagram, doc.Options
 	}
 
+	switch r.Orientation {
+	case "":
+	case "across":
+		opts = append(opts, cligram.WithOrientation(cligram.LeftToRight))
+	case "down":
+		opts = append(opts, cligram.WithOrientation(cligram.TopToBottom))
+	default:
+		return nil, fmt.Errorf("orientation is across or down, not %q", r.Orientation)
+	}
 	if r.ASCII {
 		opts = append(opts, cligram.WithGlyphs(cligram.ASCII))
 	}
@@ -82,7 +94,7 @@ func draw(r request) (*drawing, error) {
 	if r.Color {
 		theme = cligram.ANSI
 	}
-	out := &drawing{
+	out := &Drawing{
 		Title: title, Text: l.Render(cligram.State{}, theme),
 		Width: l.W, Height: l.H, Fits: l.Fits(), Format: format, Warnings: []string{},
 	}
@@ -94,15 +106,15 @@ func draw(r request) (*drawing, error) {
 
 // String is the drawing as a terminal shows it: its title, a blank line,
 // then the drawing.
-func (d *drawing) String() string {
+func (d *Drawing) String() string {
 	if d.Title == "" {
 		return d.Text + "\n"
 	}
 	return d.Title + "\n\n" + d.Text + "\n"
 }
 
-// hint is advice on the warnings, for whoever drew it to act on.
-func (d *drawing) hint() string {
+// Hint is advice on the warnings, for whoever drew it to act on.
+func (d *Drawing) Hint() string {
 	var lost, undrawn bool
 	for _, w := range d.Warnings {
 		lost = lost || strings.Contains(w, "no room for its label")

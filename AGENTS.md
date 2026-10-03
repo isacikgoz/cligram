@@ -18,6 +18,12 @@ relative placement when you want to say where things go.
 - `cmd/cligram`: draws Mermaid or YAML from a file or stdin. `-json` writes
   the drawing, size, fit and warnings; `cligram mcp` serves a `draw` tool
   over MCP on stdio. The README's examples are checked by its tests.
+- `internal/draw`: reads a source and draws it; the one way the command,
+  its MCP server and the playground draw.
+- `playground/`: the browser playground, cligram built to WebAssembly in a
+  page with xterm.js. `make serve` runs it on localhost:8418;
+  `harness/pixels/playground.mjs` checks it in headless Chromium, and CI
+  publishes it to GitHub Pages from main.
 - `.claude/skills/cligram/SKILL.md`: the skill that tells an agent when to
   draw and how. Keep it in step with the command and the `draw` tool's
   description in `cmd/cligram/mcp.go`.
@@ -193,6 +199,7 @@ make lint     # pinned golangci-lint built with this module's Go
 make golden   # rewrite testdata/*.golden; read the diff before committing
 make fuzz     # random diagrams, every drawing read back (FUZZTIME=2m)
 make pixels   # render in a real terminal engine, check the pixels (needs Node)
+make serve    # the browser playground on localhost:8418
 ```
 
 CI (`.github/workflows/ci.yml`) runs all of it on every push: tests on the

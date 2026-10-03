@@ -7,6 +7,8 @@ import (
 	"runtime/debug"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/isacikgoz/cligram/internal/draw"
 )
 
 // drawInput is what an agent passes the draw tool.
@@ -39,12 +41,12 @@ func serveMCP(in io.Reader, out io.Writer) error {
 	}
 	s := mcp.NewServer(&mcp.Implementation{Name: "cligram", Version: version}, nil)
 	mcp.AddTool(s, &mcp.Tool{Name: "draw", Description: drawTool},
-		func(_ context.Context, _ *mcp.CallToolRequest, in drawInput) (*mcp.CallToolResult, *drawing, error) {
+		func(_ context.Context, _ *mcp.CallToolRequest, in drawInput) (*mcp.CallToolResult, *draw.Drawing, error) {
 			width := in.Width
 			if width <= 0 {
 				width = 100
 			}
-			d, err := draw(request{Source: in.Source, Format: in.Format, Width: width, Height: in.Height, ASCII: in.ASCII})
+			d, err := draw.Draw(draw.Request{Source: in.Source, Format: in.Format, Width: width, Height: in.Height, ASCII: in.ASCII})
 			if err != nil {
 				// A mistake in the diagram is the agent's to fix: said as the
 				// tool's result, not as a failure of the server.
@@ -56,7 +58,7 @@ func serveMCP(in io.Reader, out io.Writer) error {
 				for _, w := range d.Warnings {
 					text += "- " + w + "\n"
 				}
-				if h := d.hint(); h != "" {
+				if h := d.Hint(); h != "" {
 					text += h + "\n"
 				}
 			}

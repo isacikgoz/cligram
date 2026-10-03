@@ -19,6 +19,8 @@ import (
 	"os"
 
 	"github.com/charmbracelet/x/term"
+
+	"github.com/isacikgoz/cligram/internal/draw"
 )
 
 func main() {
@@ -83,7 +85,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			}
 		}
 	}
-	d, err := draw(request{
+	d, err := draw.Draw(draw.Request{
 		Source: string(data), Format: *format, Width: *width, Height: *height,
 		ASCII: *ascii, Color: *color == "always" || (*color == "auto" && tty && !*asJSON),
 	})
