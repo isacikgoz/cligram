@@ -62,7 +62,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	height := flags.Int("height", 0, "and this many rows")
 	ascii := flags.Bool("ascii", false, "draw with ASCII only")
 	color := flags.String("color", "auto", "color: auto (when writing to a terminal), always or never")
-	format := flags.String("format", "auto", "the input: auto (a Mermaid flowchart if it starts as one, else YAML), mermaid or yaml")
+	format := flags.String("format", "auto", "the input: auto (Mermaid if it starts as a flowchart, state or sequence diagram, else YAML), mermaid or yaml")
 	asJSON := flags.Bool("json", false, "write the drawing, its size, whether it fits, and its warnings as JSON")
 	showVersion := flags.Bool("version", false, "say which version this is")
 	if err := flags.Parse(args); err != nil {

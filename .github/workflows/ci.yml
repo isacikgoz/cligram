@@ -48,18 +48,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # The newest Go: fuzzing looks for cligram's bugs, not the oldest
+      # toolchain's, and before 1.27 the fuzzer can fail on its own
+      # -fuzztime deadline (golang/go#75804). The tests above cover the
+      # oldest Go go.mod allows.
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: stable
       - name: draw random diagrams and read them back
         run: make fuzz FUZZTIME=${{ github.event_name == 'schedule' && '20m' || '3m' }}
+      # A worker that crashed outright says why only in its crash file.
+      - if: failure()
+        run: tail -n +1 testdata/fuzz/crash-*.txt sequence/testdata/fuzz/crash-*.txt 2>/dev/null || true
       # A failing input is the seed of a diagram cligram draws wrong: commit
       # it under testdata/fuzz/ and every test after runs it.
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: fuzz-failures
-          path: testdata/fuzz/
+          path: |
+            testdata/fuzz/
+            sequence/testdata/fuzz/
 
   pixels:
     runs-on: ubuntu-latest

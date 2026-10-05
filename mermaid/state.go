@@ -114,7 +114,7 @@ func parseState(title, text string, first int) (*Doc, error) {
 						p.nodes[c.id].class = strings.TrimPrefix(c.class, ":::")
 					}
 				}
-				p.edges = append(p.edges, edge{from, to, strings.TrimSpace(m[5]), p.line, cligram.Solid})
+				p.edges = append(p.edges, edge{from: from, to: to, label: strings.TrimSpace(m[5]), line: p.line})
 				continue
 			}
 			if m := stateText.FindStringSubmatch(stmt); m != nil {

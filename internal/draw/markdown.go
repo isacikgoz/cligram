@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-
-	"github.com/isacikgoz/cligram/mermaid"
 )
 
 // fence opens or closes a fenced code block, as CommonMark has it: up to
@@ -46,7 +44,7 @@ func Markdown(md string, r Request) (string, []error) {
 			body.WriteString(strings.TrimPrefix(l, indent))
 		}
 		block := strings.Join(lines[i:min(end+1, len(lines))], "")
-		if lang, _, _ := strings.Cut(info, " "); lang != "mermaid" || !mermaid.Is(body.String()) {
+		if lang, _, _ := strings.Cut(info, " "); lang != "mermaid" || !IsMermaid(body.String()) {
 			out.WriteString(block)
 			i = end
 			continue

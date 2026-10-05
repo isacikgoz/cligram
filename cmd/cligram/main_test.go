@@ -275,3 +275,27 @@ func TestVersionSaysWhichBuildThisIs(t *testing.T) {
 		t.Errorf("exit %d, %q %q", code, out.String(), errs.String())
 	}
 }
+
+// A sequence diagram draws like any other, and watch, which shows a run,
+// says it has none to show.
+func TestASequenceDiagramDrawsButIsNotWatched(t *testing.T) {
+	in := "sequenceDiagram\n  U->>+W: Place order\n  W-->>-U: Confirmed\n"
+	var out, errs bytes.Buffer
+	if code := run([]string{"-width", "60"}, strings.NewReader(in), &out, &errs); code != 0 {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	for _, want := range []string{"Place order", "Confirmed", "├", "◄┄"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("no %q in:\n%s", want, out.String())
+		}
+	}
+	flow := t.TempDir() + "/seq.mmd"
+	if err := os.WriteFile(flow, []byte(in), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	errs.Reset()
+	if code := run([]string{"watch", flow}, strings.NewReader("U active\n"), &out, &errs); code != 1 ||
+		!strings.Contains(errs.String(), "not a sequence diagram") {
+		t.Errorf("watch: exit %d, %s", code, errs.String())
+	}
+}

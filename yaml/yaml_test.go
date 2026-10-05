@@ -138,3 +138,18 @@ edges: [a -> b, b -> c]
 		}
 	}
 }
+
+// A link with no arrowhead has no way.
+func TestALinkWithNoHeadHasNoWay(t *testing.T) {
+	doc, err := yaml.Parse([]byte("nodes: {a: A, b: B, c: C}\nedges:\n  - a -- b\n  - b -.- c: peers\n  - c == a\n  - a -> c\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range doc.Diagram.Edges() {
+		got = append(got, fmt.Sprintf("%s>%s:%s:%d:%v", e.From, e.To, e.Label, e.Line, e.Undirected))
+	}
+	if want := "a>b::0:true b>c:peers:1:true c>a::2:true a>c::0:false"; strings.Join(got, " ") != want {
+		t.Errorf("got %s, want %s", strings.Join(got, " "), want)
+	}
+}

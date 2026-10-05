@@ -8,9 +8,10 @@ type port struct {
 }
 
 // ports are the cells of node i's border an edge may use on its sides:
-// the pinned side, or all four, the ones across the flow costing more.
+// the pinned side, or all four, the ones across the flow costing more,
+// and on each those off its middle, or off where a link aims, more.
 // A stacked box's back border has the right and bottom sides.
-func (r *router) portsOf(i int, pinned Side, leaving bool) []port {
+func (r *router) portsOf(i int, pinned Side, leaving bool, a aim) []port {
 	p := r.l.nodes[i]
 	b := r.grid(p.rect)
 	stacked := p.node.Sub != nil
@@ -21,7 +22,17 @@ func (r *router) portsOf(i int, pinned Side, leaving bool) []port {
 			return
 		}
 		side := r.sideCost(s, leaving)
+		if r.faced && a.ok && a.side != s {
+			side += costUnfaced
+		}
 		mx, my := (x0+x1)/2, (y0+y1)/2
+		if a.ok && a.side == s {
+			if s == Top || s == Bottom {
+				mx = a.at
+			} else {
+				my = a.at
+			}
+		}
 		for y := y0; y <= y1; y++ {
 			for x := x0; x <= x1; x++ {
 				out = append(out, port{x, y, s, side + costOffset*(abs(x-mx)+abs(y-my))})

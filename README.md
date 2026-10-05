@@ -39,8 +39,11 @@ EOF
 ```
 
 Without `-width` it fits the terminal it prints to. Subgraphs draw as
-titled frames. It reads state diagrams (`stateDiagram-v2`) too, and cligram's YAML ([examples/release.yaml](examples/release.yaml)), and `cligram md
-README.md` prints Markdown with its mermaid blocks drawn.
+titled frames, and a graph of links with no arrowheads (`a --- b`) is
+drawn as a network, laid out by its links. It reads state diagrams (`stateDiagram-v2`) and sequence
+diagrams (`sequenceDiagram`) too, and cligram's YAML
+([examples/release.yaml](examples/release.yaml)), and `cligram md README.md`
+prints Markdown with its mermaid blocks drawn.
 
 `cligram watch` shows a run live: pipe it events, one a line.
 

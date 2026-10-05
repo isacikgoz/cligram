@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -57,6 +58,10 @@ func runWatch(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	src, err := draw.Read(string(source), *format)
 	if err != nil {
 		complain("cligram watch:", err)
+		return 1
+	}
+	if src.Diagram == nil {
+		complain("cligram watch:", errors.New("a run is shown on a flowchart or a state diagram, not a sequence diagram"))
 		return 1
 	}
 	tty := isTerminal(stdout)

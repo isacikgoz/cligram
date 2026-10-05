@@ -15,9 +15,11 @@
 //	  - triage -> ready          # an edge
 //	  - ready -> ship: yes       # an edge and its label
 //	  - ship -.-> triage         # dashed; ==> is thick
+//	  - ship -- monitor          # a link with no way: -.- and == too
 //
 // Nodes keep the order they are written in, which is the order a flow is
-// laid out in. Every mistake is reported with its line.
+// laid out in; a diagram of links only is a network, laid out by its
+// links. Every mistake is reported with its line.
 package yaml
 
 import (
@@ -199,20 +201,25 @@ func readEdges(d *cligram.Diagram, edges *goyaml.Node, ids map[string]bool) []er
 			errs = append(errs, at(item, `an edge is "a -> b", or "a -> b: label"`))
 			continue
 		}
-		// The arrow says how the line is drawn: -.-> dashed, ==> thick.
-		from, to, ok, line := "", "", false, cligram.Solid
+		// The arrow says how the line is drawn: -.-> dashed, ==> thick;
+		// without a head, -- -.- ==, it is a link with no way.
+		from, to, ok, line, link := "", "", false, cligram.Solid, false
 		for _, a := range []struct {
 			arrow string
 			line  cligram.LineStyle
-		}{{"-.->", cligram.Dashed}, {"==>", cligram.Thick}, {"->", cligram.Solid}} {
+			link  bool
+		}{
+			{"-.->", cligram.Dashed, false}, {"==>", cligram.Thick, false}, {"->", cligram.Solid, false},
+			{"-.-", cligram.Dashed, true}, {"==", cligram.Thick, true}, {"--", cligram.Solid, true},
+		} {
 			if from, to, ok = strings.Cut(spec, a.arrow); ok {
-				line = a.line
+				line, link = a.line, a.link
 				break
 			}
 		}
 		from, to = strings.TrimSpace(from), strings.TrimSpace(to)
 		if !ok || from == "" || to == "" {
-			errs = append(errs, at(where, `%q is not an edge: write "a -> b"`, spec))
+			errs = append(errs, at(where, `%q is not an edge: write "a -> b", or "a -- b" for a link`, spec))
 			continue
 		}
 		bad := false
@@ -223,7 +230,11 @@ func readEdges(d *cligram.Diagram, edges *goyaml.Node, ids map[string]bool) []er
 			}
 		}
 		if !bad {
-			d.Edge(from, to, cligram.Label(label), cligram.Line(line))
+			opts := []cligram.EdgeOption{cligram.Label(label), cligram.Line(line)}
+			if link {
+				opts = append(opts, cligram.Undirected())
+			}
+			d.Edge(from, to, opts...)
 		}
 	}
 	return errs

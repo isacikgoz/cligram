@@ -363,3 +363,29 @@ func TestACompositeStateIsAFrameAfterItsBox(t *testing.T) {
 		t.Errorf("nodes in %q, want %q; groups %+v", in, want, doc.Diagram.Groups())
 	}
 }
+
+// A link with no arrowhead has no way, whatever its line; one with a head
+// at either end has one.
+func TestALinkWithNoHeadHasNoWay(t *testing.T) {
+	doc, err := mermaid.Parse([]byte(`graph LR
+  a --- b
+  a -.- c
+  a === d
+  a -- talks --- e
+  a ---|syncs| f
+  a --> g
+  a --x h
+  a <--> i
+  a -.-> j`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range doc.Diagram.Edges() {
+		got = append(got, fmt.Sprintf("%s:%s:%v", e.To, e.Label, e.Undirected))
+	}
+	want := "b::true c::true d::true e:talks:true f:syncs:true g::false h::false i::false j::false"
+	if strings.Join(got, " ") != want {
+		t.Errorf("got  %s\nwant %s", strings.Join(got, " "), want)
+	}
+}

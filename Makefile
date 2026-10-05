@@ -15,11 +15,17 @@ lint:
 golden:
 	go test ./... -update
 
-# fuzz draws random diagrams and reads every drawing back, for FUZZTIME;
-# a failing input lands in testdata/fuzz/ and runs in every test after.
+# fuzz draws random diagrams and reads every drawing back, flowcharts and
+# then sequence diagrams, each for FUZZTIME; a failing input lands in the
+# package's testdata/fuzz/ and runs in every test after. A worker that
+# crashes leaves its trace beside it, in crash-<pid>.txt (internal/crash).
 FUZZTIME ?= 2m
 fuzz:
-	go test -run '^$$' -fuzz FuzzDrawings -fuzztime $(FUZZTIME) .
+	@status=0; \
+	go test -run '^$$' -fuzz FuzzDrawings -fuzztime $(FUZZTIME) . && \
+	go test -run '^$$' -fuzz FuzzDrawings -fuzztime $(FUZZTIME) ./sequence || status=$$?; \
+	find . -path '*/testdata/fuzz/crash-*.txt' -empty -delete; \
+	exit $$status
 
 # pixels renders cases in a real terminal engine (xterm.js in headless
 # Chromium, in real fonts) and checks the screenshots cell by cell. It

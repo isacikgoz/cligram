@@ -31,7 +31,7 @@ Write the diagram as a Mermaid flowchart:
     a[Plan] --> b{Ready?}
     b -->|yes| c([Ship])
     b -->|no| a
-A state machine may be a stateDiagram-v2 instead. [text] is a step, {text} a decision, ([text]) an end; -->|label| labels an edge; -.-> is dashed and ==> thick; subgraph id [Title] ... end draws a frame round some nodes; node:::class names a kind of node. Use flowchart TD for a tall flow.
+A state machine may be a stateDiagram-v2 instead, and messages between services or people a sequenceDiagram (A->>B: request, B-->>A: reply, alt/else, loop, Note over A,B: text). [text] is a step, {text} a decision, ([text]) an end; -->|label| labels an edge; -.-> is dashed and ==> thick; a --- b is a link with no way, and a graph of only those (services, peers) is drawn as a network; subgraph id [Title] ... end draws a frame round some nodes; node:::class names a kind of node. Use flowchart TD for a tall flow.
 
 The result is the drawing, to put in your reply inside a code block, exactly as returned. If it lists warnings, act on them: shorten labels that found no room, or draw it wider.
 
@@ -63,7 +63,9 @@ func serveMCP(in io.Reader, out io.Writer) error {
 			// in the diagram: the drawing is still worth having.
 			var notes []string
 			if len(in.Events) > 0 {
-				if src, err := draw.Read(in.Source, in.Format); err == nil {
+				if src, err := draw.Read(in.Source, in.Format); err == nil && src.Diagram == nil {
+					notes = append(notes, "events show a run on a flowchart or a state diagram; a sequence diagram has none")
+				} else if err == nil {
 					for i, line := range in.Events {
 						ev, ok, err := watch.Parse(line)
 						if err == nil && ok {

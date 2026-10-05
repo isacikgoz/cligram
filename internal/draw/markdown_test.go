@@ -23,7 +23,7 @@ func TestMarkdownLeavesTheRestAsItWas(t *testing.T) {
 	for name, md := range map[string]string{
 		"no blocks":         "# Just text\n\nNothing to draw.\n",
 		"go":                "```go\nfunc main() {}\n```\n",
-		"another diagram":   "```mermaid\nsequenceDiagram\n  A->>B: hi\n```\n",
+		"another diagram":   "```mermaid\nclassDiagram\n  Animal <|-- Duck\n```\n",
 		"no trailing break": "text without a final newline",
 		"a longer fence":    "````markdown\n```mermaid\nflowchart LR\n a --> b\n```\n````\n",
 	} {

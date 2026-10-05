@@ -117,6 +117,11 @@ type Edge struct {
 	FromSide, ToSide Side
 	// Line is how the edge's line is drawn: solid, dashed or thick.
 	Line LineStyle
+	// Undirected is a link with no way: drawn with no arrowhead, and
+	// never sharing a line with another edge, so where it goes is plain.
+	// A diagram whose edges are all undirected is a network, laid out by
+	// its links rather than as a flow. A loop is drawn as directed.
+	Undirected bool
 }
 
 // LineStyle is how an edge's line is drawn. Its straight runs show it;
@@ -265,6 +270,12 @@ func Line(s LineStyle) EdgeOption {
 	return func(e *Edge) { e.Line = s }
 }
 
+// Undirected makes the edge a link with no way, as in a network: a db
+// and a cache that talk both ways, a cluster's peers.
+func Undirected() EdgeOption {
+	return func(e *Edge) { e.Undirected = true }
+}
+
 // From pins the side the edge leaves its first node on.
 func From(s Side) EdgeOption {
 	return func(e *Edge) { e.FromSide = s }
@@ -291,11 +302,19 @@ func (d *Diagram) Edge(from, to string, opts ...EdgeOption) {
 }
 
 func (e Edge) describe() string {
-	if e.Label == "" {
-		return fmt.Sprintf("%s -> %s", e.From, e.To)
+	way := "->"
+	if e.linked() {
+		way = "--"
 	}
-	return fmt.Sprintf("%s -> %s %q", e.From, e.To, e.Label)
+	if e.Label == "" {
+		return fmt.Sprintf("%s %s %s", e.From, way, e.To)
+	}
+	return fmt.Sprintf("%s %s %s %q", e.From, way, e.To, e.Label)
 }
+
+// linked reports whether e is drawn as a link with no way: undirected, and
+// not a loop, which has no other end to link.
+func (e Edge) linked() bool { return e.Undirected && e.From != e.To }
 
 func (d *Diagram) has(id string) bool { _, ok := d.index[id]; return ok }
 

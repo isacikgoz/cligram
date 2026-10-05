@@ -91,3 +91,40 @@ func ExampleLayout_RenderView() {
 	// Output:
 	// false true
 }
+
+// A network: links with no way, laid out by its links from its middle,
+// the node every other is fewest links from.
+func Example_network() {
+	d := cligram.New()
+	d.Node("web", "Web app")
+	d.Node("api", "API")
+	d.Node("auth", "Auth")
+	d.Node("db", "Postgres")
+	d.Node("cache", "Redis")
+	d.Node("queue", "Queue")
+	d.Node("worker", "Worker")
+	for _, l := range [][2]string{
+		{"web", "api"}, {"api", "auth"}, {"api", "db"}, {"api", "cache"},
+		{"api", "queue"}, {"queue", "worker"}, {"worker", "db"}, {"auth", "db"},
+	} {
+		d.Edge(l[0], l[1], cligram.Undirected())
+	}
+	l := d.Layout(cligram.WithOrientation(cligram.TopToBottom), cligram.Fit(80, 24))
+	fmt.Println(l.Render(cligram.State{}, cligram.Plain))
+	// Output:
+	//                                 ╭───────────╮
+	//       ┌─────────────────────────┤    API    │
+	//       │                         ╰───┬─┬─┬─┬─╯
+	//       │                             │ │ │ │
+	//       │                 ┌───────────┘ │ │ └─────────────────────────┐
+	//       │                 │             │ │                           │
+	//       │                 │             │ └───────────────┐           │
+	//       │                 │             │                 │           │
+	// ╭─────┴─────╮      ╭────┴────╮  ╭─────┴──────╮     ╭────┴───╮  ╭────┴────╮
+	// │   Web app │      │   Queue │  │   Postgres ├─────┤   Auth │  │   Redis │
+	// ╰───────────╯      ╰────────┬╯  ╰──────┬─────╯     ╰────────╯  ╰─────────╯
+	//                             │          │
+	//                          ╭──┴───────╮  │
+	//                          │   Worker ├──┘
+	//                          ╰──────────╯
+}

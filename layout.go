@@ -133,7 +133,7 @@ func (l *Layout) paint(st State) *canvas {
 			}
 			st := edgeStyle(last)
 			st.Line = rt.edge.Line
-			c.path(rt.path, rt.group, st, true)
+			c.path(rt.path, rt.group, st, !rt.edge.linked())
 		}
 	}
 	for _, rt := range l.routes {

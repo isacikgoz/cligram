@@ -10,7 +10,9 @@
 //	  ready -->|no| fix[Fix it]:::agent
 //	  fix --> ready
 //
-// It also reads state diagrams (stateDiagram-v2); see state.go. Of
+// It also reads state diagrams (stateDiagram-v2), see state.go, and
+// sequence diagrams (sequenceDiagram) onto package sequence, see
+// sequence.go. Of
 // flowcharts it reads the subset that maps onto cligram:
 //
 //   - shapes: [text], (text), [[text]], [(text)], >text], [/text/] and
@@ -18,7 +20,9 @@
 //     ((text)) ends. Text may be quoted, and <br> breaks a line.
 //   - links: -->, ---, -.->, -.-, ==>, ===, --x, --o and <-->, with a
 //     label as -->|label| or -- label -->; chains (a --> b --> c) and
-//     groups (a & b --> c).
+//     groups (a & b --> c). A link with no arrowhead (---, -.-, ===) is
+//     undirected; a flowchart of only those is a network, laid out by its
+//     links rather than as a flow.
 //   - flowchart (or graph) TD, TB, LR, RL or BT; a front matter title;
 //     node:::class and "class a,b name" for classes; subgraphs, drawn
 //     as titled frames, nested too; %% comments.
@@ -112,6 +116,7 @@ type edge struct {
 	from, to, label string
 	line            int
 	style           cligram.LineStyle
+	undirected      bool
 }
 
 // Parse reads a diagram from a flowchart.
@@ -131,6 +136,10 @@ func Parse(data []byte) (*Doc, error) {
 					return parseState(title, text, i+1)
 				}
 				m := header.FindStringSubmatch(stmt)
+				if m == nil && seqHeader.MatchString(stmt) {
+					p.fail("a flowchart starts with \"flowchart LR\" or \"flowchart TD\", not %q: a sequence diagram is read with ParseSequence", stmt)
+					return nil, errors.Join(p.errs...)
+				}
 				if m == nil {
 					p.fail("a flowchart starts with \"flowchart LR\" or \"flowchart TD\", not %q", stmt)
 					return nil, errors.Join(p.errs...)
@@ -191,7 +200,11 @@ func (p *parser) finish() (*Doc, error) {
 			continue // Mermaid draws a link written twice once
 		}
 		seen[ref] = true
-		d.Edge(e.from, e.to, cligram.Label(e.label), cligram.Line(e.style))
+		opts := []cligram.EdgeOption{cligram.Label(e.label), cligram.Line(e.style)}
+		if e.undirected {
+			opts = append(opts, cligram.Undirected())
+		}
+		d.Edge(e.from, e.to, opts...)
 	}
 	if err := d.Check(); err != nil {
 		return nil, err
@@ -239,9 +252,10 @@ var (
 	plain = regexp.MustCompile(`^<?(?:-\.+->|-\.+-|-{2,}[>xo]|-{3,}|={2,}>|={3,})(?:\s*\|([^|]*)\|)?`)
 )
 
-// link reads a link from the front of *s, giving its label and how its
-// line is drawn: -.-> dashed, ==> thick.
-func link(s *string) (string, cligram.LineStyle, bool) {
+// link reads a link from the front of *s, giving its label, how its line
+// is drawn (-.-> dashed, ==> thick) and whether it has no arrowhead (---,
+// -.-, ===), a link with no way.
+func link(s *string) (string, cligram.LineStyle, bool, bool) {
 	style := func(m string) cligram.LineStyle {
 		switch {
 		case strings.HasPrefix(strings.TrimPrefix(m, "<"), "-."):
@@ -251,17 +265,23 @@ func link(s *string) (string, cligram.LineStyle, bool) {
 		}
 		return cligram.Solid
 	}
+	headless := func(m string) bool {
+		if i := strings.Index(m, "|"); i >= 0 {
+			m = strings.TrimSpace(m[:i])
+		}
+		return !strings.HasPrefix(m, "<") && (strings.HasSuffix(m, "-") || strings.HasSuffix(m, "="))
+	}
 	for _, re := range labelled {
 		if m := re.FindStringSubmatch(*s); m != nil {
 			*s = (*s)[len(m[0]):]
-			return strings.TrimSpace(m[1]), style(m[0]), true
+			return strings.TrimSpace(m[1]), style(m[0]), headless(m[0]), true
 		}
 	}
 	if m := plain.FindStringSubmatch(*s); m != nil {
 		*s = (*s)[len(m[0]):]
-		return strings.TrimSpace(m[1]), style(m[0]), true
+		return strings.TrimSpace(m[1]), style(m[0]), headless(m[0]), true
 	}
-	return "", cligram.Solid, false
+	return "", cligram.Solid, false, false
 }
 
 // readID reads a node id from the front of s: letters, digits, _ and .,
@@ -315,7 +335,7 @@ func (p *parser) statement(s string) {
 		if rest == "" {
 			return
 		}
-		label, style, ok := link(&rest)
+		label, style, undirected, ok := link(&rest)
 		if !ok {
 			p.fail("expected a link such as --> after the node, found %q", rest)
 			return
@@ -327,7 +347,7 @@ func (p *parser) statement(s string) {
 		}
 		for _, from := range prev {
 			for _, to := range next {
-				p.edges = append(p.edges, edge{from, to, label, p.line, style})
+				p.edges = append(p.edges, edge{from, to, label, p.line, style, undirected})
 			}
 		}
 		prev = next
