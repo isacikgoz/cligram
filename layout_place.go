@@ -143,8 +143,12 @@ func floorDiv(a, b int) int {
 
 func (y *layouter) run() {
 	y.placements()
-	y.auto()
-	y.stack()
+	if y.l.network() {
+		y.network()
+	} else {
+		y.auto()
+		y.stack()
+	}
 	y.solve()
 }
 

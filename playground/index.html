@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>cligram playground</title>
-<meta name="description" content="Paste a Mermaid flowchart and see it drawn as text, the way cligram draws it in a terminal.">
+<meta name="description" content="Paste a Mermaid flowchart or sequence diagram and see it drawn as text, the way cligram draws it in a terminal.">
 <script>
   // The theme picked last time, before the first paint.
   try { const t = localStorage.getItem("cligram-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
@@ -202,7 +202,7 @@ dialog h2 { margin: 0; font: 600 15px var(--sans); display: flex; justify-conten
 <main>
   <section class="pane">
     <div class="pane-head">
-      <h2 id="srcHead"><b>Source</b>a Mermaid flowchart or cligram YAML</h2>
+      <h2 id="srcHead"><b>Source</b>a Mermaid diagram or cligram YAML</h2>
       <label for="example"><span class="visually-hidden">Example</span>
         <select id="example" aria-label="Example"></select>
       </label>
@@ -313,6 +313,15 @@ flowchart LR
   left -->|yes| call
   left -->|no| fail([Give up])
   status -->|4xx| fail` },
+  { name: "Services (network)", source: `graph TD
+  web[Web app] --- api[API]
+  api --- auth[Auth]
+  api --- db[(Postgres)]
+  api --- cache[(Redis)]
+  api ---|jobs| queue[Queue]
+  queue --- worker[Worker]
+  worker --- db
+  auth --- db` },
   { name: "Order (state diagram)", source: `stateDiagram-v2
   [*] --> Draft
   Draft --> Review : submit
@@ -321,6 +330,23 @@ flowchart LR
   Approved --> Shipped : yes
   Approved --> Draft : changes
   Shipped --> [*]` },
+  { name: "Checkout (sequence diagram)", source: `sequenceDiagram
+  autonumber
+  actor U as Shopper
+  participant W as Web app
+  participant P as Payments
+  U->>+W: Place order
+  W->>+P: Charge card
+  alt accepted
+    P-->>W: Paid
+    W-->>U: Order confirmed
+  else declined
+    P--xW: Declined
+    W-->>U: Try another card
+  end
+  deactivate P
+  deactivate W
+  Note over U,W: An email follows` },
   { name: "Release (YAML)", source: `title: Release
 nodes:
   triage: Triage

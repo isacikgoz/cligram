@@ -1,6 +1,6 @@
 ---
 name: cligram
-description: Draw flow diagrams as text in the terminal with cligram, from a Mermaid flowchart. Use when explaining or planning a process, a pipeline, a workflow, a state machine, an agent loop, a request's path through services, a decision tree or the steps of a change, and a picture would say it faster than prose; when the user asks to "draw", "diagram", "sketch" or "show the flow" in a terminal or chat; or when you would otherwise draw boxes and arrows by hand or leave Mermaid source unrendered. NOT for charts of data, and NOT for diagrams that are not steps joined by arrows.
+description: Draw flow diagrams as text in the terminal with cligram, from a Mermaid flowchart, state or sequence diagram. Use when explaining or planning a process, a pipeline, a workflow, a state machine, an agent loop, a request's path through services, the messages between services or people, a decision tree or the steps of a change, and a picture would say it faster than prose; when the user asks to "draw", "diagram", "sketch" or "show the flow" in a terminal or chat; or when you would otherwise draw boxes and arrows by hand or leave Mermaid source unrendered. NOT for charts of data, and NOT for diagrams that are not steps or messages joined by arrows.
 ---
 
 # cligram
@@ -48,10 +48,18 @@ character's place matters.
   joins several. `a -.-> b` draws dashed (optional, a fallback), `a ==> b`
   thick (the main way).
 - `a[text]:::human` gives a node a class; a host may color classes.
+- `a --- b` is a link with no way, drawn without an arrowhead. A graph of
+  only those (services that talk, a cluster's peers) is a network, laid
+  out from its best-linked node outward rather than as a flow.
 - `subgraph id [Title]` ... `end` draws a titled frame round its nodes:
   a stage, a team's part, a loop's inside. They nest.
 - A state machine can be a `stateDiagram-v2`: `[*] --> a`, `a --> b : event`,
   `state c <<choice>>`; `[*]` draws as Start and End.
+- Messages between services or people, in order, are a `sequenceDiagram`:
+  `participant api as Orders API`, `actor u`, `u->>+api: GET /orders`
+  (`+` and `-` activate), `api-->>-u: 200` (dashed, a reply), `--x` lost;
+  `alt cond` / `else` / `end`, `loop`, `opt`, `par`/`and`;
+  `Note over u,api: text`; `autonumber`. It is always drawn top down.
 - Keep node text short (it wraps at 24 columns, three lines at most) and
   labels shorter (20 columns, one line): cligram cuts longer text with `…`.
 - Name nodes with short ids and give the words in brackets: `ci[CI runs]`.

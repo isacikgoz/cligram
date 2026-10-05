@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/isacikgoz/cligram"
+	"github.com/isacikgoz/cligram/internal/crash"
 	"github.com/isacikgoz/cligram/internal/reader"
 )
 
@@ -122,24 +123,32 @@ func generate(seed uint64) drawCase {
 		c.d.Node(id, g.text, opts...)
 		c.nodes = append(c.nodes, g)
 	}
-	seen := map[cligram.EdgeRef]cligram.LineStyle{}
+	seen := map[cligram.EdgeRef]cligram.Edge{}
 	// Line styles come from a stream of their own, so every seed draws
 	// the diagram it always did, now with some lines dashed or thick.
 	styles := rand.New(rand.NewPCG(seed, 0x5eed))
+	// Links, edges with no way, from a stream of their own too: a quarter
+	// of the diagrams are networks, all links, and a quarter have some.
+	lrng := rand.New(rand.NewPCG(seed, 0x11c))
+	linkOdds := []int{0, 0, 1, 4}[lrng.IntN(4)] // 1 in linkOdds, 0 for none
 	edge := func(from, to string) {
 		label := ""
 		if rng.IntN(2) == 0 {
 			label = pick(rng, labelWords)
 		}
-		e := cligram.Edge{From: from, To: to, Label: label}
-		line, again := seen[e.Ref()]
+		e, again := seen[cligram.EdgeRef{From: from, To: to, Label: label}]
 		if !again {
-			line = pick(styles, []cligram.LineStyle{cligram.Solid, cligram.Solid, cligram.Solid, cligram.Dashed, cligram.Thick})
-			seen[e.Ref()] = line
-			e.Line = line
+			e = cligram.Edge{From: from, To: to, Label: label}
+			e.Line = pick(styles, []cligram.LineStyle{cligram.Solid, cligram.Solid, cligram.Solid, cligram.Dashed, cligram.Thick})
+			e.Undirected = linkOdds > 0 && lrng.IntN(linkOdds) == 0
+			seen[e.Ref()] = e
 			c.edges = append(c.edges, e)
 		}
-		c.d.Edge(from, to, cligram.Label(label), cligram.Line(line))
+		opts := []cligram.EdgeOption{cligram.Label(label), cligram.Line(e.Line)}
+		if e.Undirected {
+			opts = append(opts, cligram.Undirected())
+		}
+		c.d.Edge(from, to, opts...)
 	}
 	// Mostly a flow onward, with branches, loops back and the odd self-loop.
 	for i := 1; i < n; i++ {
@@ -323,14 +332,25 @@ func checkEdges(t *testing.T, c drawCase, pic *reader.Picture, byID map[int]stri
 	for _, ref := range c.states[0].Taken {
 		taken[ref] = true
 	}
-	type key struct{ from, to string }
+	// A link has no way: it is known by its two ends, in either order.
+	type key struct {
+		from, to string
+		link     bool
+	}
+	keyOf := func(from, to string, link bool) key {
+		if link && to < from {
+			from, to = to, from
+		}
+		return key{from, to, link}
+	}
 	want := map[key][]cligram.Edge{}
 	for _, e := range c.edges {
-		want[key{e.From, e.To}] = append(want[key{e.From, e.To}], e)
+		k := keyOf(e.From, e.To, e.Undirected && e.From != e.To)
+		want[k] = append(want[k], e)
 	}
 	got := map[key][]reader.Edge{}
 	for _, e := range pic.Edges {
-		k := key{byID[e.From], byID[e.To]}
+		k := keyOf(byID[e.From], byID[e.To], e.Undirected)
 		got[k] = append(got[k], e)
 	}
 	for k, es := range want {
@@ -342,8 +362,12 @@ func checkEdges(t *testing.T, c drawCase, pic *reader.Picture, byID map[int]stri
 		// Match labels: each read label to an edge whose label it is.
 		used := make([]bool, len(gs))
 		for _, e := range es {
+			way := "->"
+			if e.Undirected && e.From != e.To {
+				way = "--"
+			}
 			lost := slices.ContainsFunc(warnings, func(w string) bool {
-				return strings.Contains(w, fmt.Sprintf("edge %s -> %s %q has no room", e.From, e.To, e.Label))
+				return strings.Contains(w, fmt.Sprintf("edge %s %s %s %q has no room", e.From, way, e.To, e.Label))
 			})
 			// Of the lines it could be, one of its own style first: two
 			// edges between the same boxes, both without a label to show,
@@ -382,8 +406,8 @@ func checkEdges(t *testing.T, c drawCase, pic *reader.Picture, byID map[int]stri
 			}
 			// Edges between the same boxes may have their arrowheads drawn
 			// over by each other's color only if they share a cell; they do
-			// not, so each is its own.
-			if gs[match].ArrowSGR != wantSGR && len(gs) == 1 {
+			// not, so each is its own. A link has none.
+			if !k.link && gs[match].ArrowSGR != wantSGR && len(gs) == 1 {
 				t.Errorf("%s -> %s %q: arrowhead drawn %q, want %q", e.From, e.To, e.Label, gs[match].ArrowSGR, wantSGR)
 			}
 		}
@@ -561,6 +585,7 @@ func TestDrawingsReadBack(t *testing.T) {
 }
 
 func FuzzDrawings(f *testing.F) {
+	crash.KeepTrace(f)
 	for seed := range uint64(8) {
 		f.Add(seed)
 	}

@@ -128,6 +128,49 @@ it must to show a node (the active step), and `l.RenderView(st, theme,
 view)` paints only that window. `l.Fits()` says which happened. About 10ms
 for the 19-step factory loop.
 
+## Networks
+
+A network is a diagram whose edges all have no way (`Undirected()`,
+Mermaid's `---`): services that talk, a cluster's peers. There is no flow
+to follow, so the automatic layout is replaced (`layout_network.go`).
+
+| Question | Decision | Why |
+|---|---|---|
+| How is a link drawn? | No arrowhead: its line ends in a junction on the target's border, as it leaves the source's | Reads as joined at both ends |
+| Do links share lines? | Never: each is a line of its own, crossing others only | A branching line with no arrowheads would not say which boxes it links |
+| Where do nodes go? | Each connected part spreads out from its middle (fewest links to the farthest node, then most links), in layers by distance along the main axis; parts side by side across it | A hub in the middle, its neighbours round it, reads as a network does |
+| Order in a layer | By the average place of each node's links in the layer beside it, a few sweeps each way, then neighbours swapped while that crosses fewer links (or makes a link within a layer pass fewer nodes) | The usual layered-drawing heuristics; cheap for a diagram that fits a terminal |
+| Place across | Near the middle of its links in the layers beside it, placed from each side and averaged | Leans neither way |
+| Room between layers | A lane per link that must turn, where their runs across overlap | A line turning beside a box would run along its side |
+| A busy box | Top to bottom, widened so each link to a layer above or below has its own cell on that side, text kept in the middle; links aimed along the side in the order their other ends lie, and leaving off the facing side costs more | The fan out of a hub then neither goes round nor crosses itself |
+| Routing order | Top to bottom, longest first, so a fan's outer links take the outer cells; across, shortest first, as for flows | Across, the side facing the next layer is one cell, and the fan goes out of the top and bottom |
+| Through the solver | Positions become minimums, each its own statement | What the author placed and frames kept clear still win, dropping only what they contradict |
+
+## Sequence diagrams (`cligram/sequence`)
+
+A sequence diagram is not a flow: its participants stand in a row in the
+order they are named, and what happens between them goes down the page
+in the order it happens. So it has its own package, model and layout, and
+shares only the glyphs, themes and text wrapping with flowcharts.
+
+| Question | Decision | Why |
+|---|---|---|
+| Where do participants go? | In the order they are first named, each lifeline as far left as the text between it and the ones before it lets it be (a longest path over "lifeline j at least d right of i") | The order is the author's; the spacing is the least that keeps every word clear |
+| Where does a message's text go? | Above its line, centered between the two lifelines, wrapped; a text crossing other lifelines covers them, a cell round it | Reads like Mermaid's; covering keeps a wrapped text one block |
+| A message crossing a lifeline | Its line runs over it unbroken | A junction there would read as the message touching that participant |
+| Activations | A heavy lifeline (`┃`), `┠` and `┨` (vertical heavy, the line light) where a message leaves one | A bar beside the lifeline would cost a column per level; nesting shows only as active or not |
+| Notes | Square corners (`┌┐└┘`), beside a lifeline with one blank and twice as far from the next | Unlike any participant box; the nearer lifeline is its own |
+| Blocks (loop, alt, ...) | A frame in the flowchart's dashed frame glyphs, round everything in it with two columns to spare; its title and its sections' titles start right of its first lifeline, cover any other lifeline on their row, and end in a stroke of border | Sides never land on a lifeline, the first lifeline runs on through, and where a title ends is plain |
+| Participant boxes at the bottom too? | No | Rows are what a terminal is short of; the boxes are a scroll up |
+| Fitting the terminal | Narrower text, 3/4 at a time down to 8 cells; height is never fitted | Wrapping is all that changes the width; a long exchange scrolls |
+| Live runs | Not yet | A run on a sequence diagram is a message reached; the model has no state yet |
+
+The harness in `sequence/harness_test.go` reads random drawings back
+from their glyphs alone (`sequence/reader_test.go`), as for flowcharts:
+every participant, message, note and block in order, every glyph
+explained, frames round what they hold, activations where they were
+asked for. `FuzzDrawings` in that package searches for more.
+
 ## Terminal pitfalls
 
 - `┼` reads as both a junction and a crossing, so it only ever means a

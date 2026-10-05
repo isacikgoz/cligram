@@ -259,3 +259,32 @@ func TestFramesAreReadWithTheirTitleAndLinesAcrossThem(t *testing.T) {
 		t.Errorf("boxes %d, %d inside; edges %+v", len(pic.Boxes), inside, pic.Edges)
 	}
 }
+
+// A line joining two boxes with no arrowhead is a link between them, its
+// label its own; one joining three is no link anyone can read.
+func TestALinkJoinsTwoBoxesWithNoWay(t *testing.T) {
+	text := `╭─────╮          ╭─────╮
+│   a ├─[ peers ]┤   b │
+╰─────╯          ╰─────╯`
+	pic, err := reader.Read(text)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, text)
+	}
+	if len(pic.Edges) != 1 {
+		t.Fatalf("edges %+v", pic.Edges)
+	}
+	e := pic.Edges[0]
+	if !e.Undirected || pic.Boxes[e.From].Text() != "a" || pic.Boxes[e.To].Text() != "b" || e.Label != "peers" {
+		t.Errorf("read %+v", e)
+	}
+
+	three := `╭─────╮    ╭─────╮
+│   a ├──┬─┤   b │
+╰─────╯  │ ╰─────╯
+      ╭──┴──╮
+      │   c │
+      ╰─────╯`
+	if _, err := reader.Read(three); err == nil || !strings.Contains(err.Error(), "leaves 3 boxes") {
+		t.Errorf("a line joining three boxes: %v", err)
+	}
+}

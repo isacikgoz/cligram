@@ -30,6 +30,7 @@ const (
 	costSide     = 3  // leaving or arriving across the flow, per quarter turn
 	costOffset   = 3  // a cell off the middle of a side: more than the line it saves
 	costSplit    = 12 // a second way out of a side for one group
+	costUnfaced  = 9  // a link leaving or arriving off the side that faces its other end, where boxes are made wide for it
 	routeMargin  = 4  // room around the picture for edges to go round it
 	searchSlack  = 8  // room around two boxes searched first
 	labelPadding = 1  // line kept each side of a label
@@ -72,7 +73,7 @@ type route struct {
 	edge   Edge
 	group  int
 	label  string
-	path   []Point // corners, from the border cell to the arrowhead's cell
+	path   []Point // corners, from the border cell to the arrowhead's cell, or a link's target's border
 	labelX int
 	labelY int
 	placed bool // the label found a place
@@ -119,6 +120,11 @@ type router struct {
 	before, after snapshot
 	// portBuf is room for portsOf's ports, reused.
 	portBuf []port
+	// aims are where along their sides links would rather leave and
+	// arrive, by edge; faced is set where boxes are wide enough for each
+	// link to have its own cell on the side that faces its other end.
+	aims  map[EdgeRef][2]aim
+	faced bool
 }
 
 // routers keeps routers between routings: Fit routes a diagram many
@@ -157,6 +163,8 @@ func newRouter(l *Layout, o Orientation) *router {
 	r.xlines, r.xgroup, r.frame = cleared(r.xlines, n), cleared(r.xgroup, n), cleared(r.frame, n)
 	r.ports, r.off, r.drawn = emptied(r.ports), emptied(r.off), emptied(r.drawn)
 	r.search.tables(n)
+	r.faced = l.network() && o == TopToBottom
+	r.aimLinks()
 	for i, p := range l.nodes {
 		b := r.grid(p.rect)
 		for y := b.Y; y < b.Y+b.H; y++ {
@@ -238,15 +246,25 @@ func (r *router) cellOf(x, y int) int { return y*r.w + x }
 // again, a few times, keeping the attempt that drew the most.
 func routeAll(l *Layout, o Orientation, ell string, lim Limits) ([]route, []error) {
 	// Edges from one node share a trunk, those of one line style only: a
-	// dashed way on shared with a solid one would show no dashes.
+	// dashed way on shared with a solid one would show no dashes. A link
+	// shares with nothing: with no arrowheads, lines that branch would
+	// not say which boxes they link.
 	type key struct {
 		from string
 		line LineStyle
+		link int
+	}
+	keyOf := func(i int) key {
+		e := l.edges[i]
+		if e.linked() {
+			return key{link: i + 1}
+		}
+		return key{from: e.From, line: e.Line}
 	}
 	groups := map[key]int{}
-	for _, e := range l.edges {
-		if _, ok := groups[key{e.From, e.Line}]; !ok {
-			groups[key{e.From, e.Line}] = len(groups) + 1
+	for i := range l.edges {
+		if _, ok := groups[keyOf(i)]; !ok {
+			groups[keyOf(i)] = len(groups) + 1
 		}
 	}
 	order := make([]int, len(l.edges))
@@ -261,9 +279,18 @@ func routeAll(l *Layout, o Orientation, ell string, lim Limits) ([]route, []erro
 	// A labelled loop goes round a corner of its box, which takes sides
 	// the flow would rather have: it goes last, where there is room left.
 	last := func(i int) bool { return loop(l.edges[i]) && l.edges[i].Label != "" }
+	// A network laid out top to bottom fans its links out of the wide
+	// side of a box, a cell each: the longest go first, to the outer
+	// cells, and the shorter inside them, so the fan does not cross
+	// itself. Laid out across, the side facing the next layer is one
+	// cell, and the fan goes out of the top and bottom, nearest first.
+	longestFirst := l.network() && o == TopToBottom
 	sort.SliceStable(order, func(a, b int) bool {
 		if la, lb := last(order[a]), last(order[b]); la != lb {
 			return lb
+		}
+		if longestFirst {
+			return length(order[a]) > length(order[b])
 		}
 		return length(order[a]) < length(order[b])
 	})
@@ -274,7 +301,7 @@ func routeAll(l *Layout, o Orientation, ell string, lim Limits) ([]route, []erro
 	for range routeAttempts {
 		routes := make([]route, len(l.edges))
 		for i, e := range l.edges {
-			routes[i] = route{edge: e, group: groups[key{e.From, e.Line}], label: cut(e.Label, lim.LabelWidth, ell)}
+			routes[i] = route{edge: e, group: groups[keyOf(i)], label: cut(e.Label, lim.LabelWidth, ell)}
 		}
 		r := newRouter(l, o)
 		failed, lost, warns := r.routeIn(routes, order)
@@ -318,7 +345,7 @@ func (r *router) routeIn(routes []route, order []int) (failed []int, lost int, w
 			before = r.save(&r.before)
 		}
 		r.commit(cells, rt.group)
-		rt.path = r.corners(cells)
+		rt.path = r.pathOf(rt.edge, cells, rt.group)
 		if rt.label == "" {
 			continue
 		}
@@ -346,13 +373,14 @@ func (r *router) routeIn(routes []route, order []int) (failed []int, lost int, w
 					continue
 				}
 				r.commit(alone, rt.group)
+				alonePath := r.pathOf(rt.edge, alone, rt.group)
 				// It is no trunk: an edge routed later may cross it but
 				// not join it, or its label would lead two ways.
 				for _, c := range alone[1:] {
 					r.sole[c] = true
 				}
 				if x, y, ok := r.placeLabel(alone, rt.label, try.corners, rt.edge.From == rt.edge.To); ok {
-					rt.path, rt.labelX, rt.labelY, rt.placed = r.corners(alone), x, y, true
+					rt.path, rt.labelX, rt.labelY, rt.placed = alonePath, x, y, true
 					placed = true
 					break
 				}
@@ -484,6 +512,20 @@ func (r *router) commit(cells []int, group int) {
 		r.group[c] = group
 		r.uses[c]++
 	}
+}
+
+// pathOf is a committed route's path: its corners, and for a link, on
+// into its target's border, which shows the line arriving as the source's
+// shows it leaving, and is a way in for no other edge.
+func (r *router) pathOf(e Edge, cells []int, group int) []Point {
+	path := r.corners(cells)
+	if !e.linked() || len(cells) < 2 {
+		return path
+	}
+	end, prev := cells[len(cells)-1], cells[len(cells)-2]
+	border := end + (end - prev)
+	r.ports[border] = group
+	return append(path, Point{border % r.w, border / r.w})
 }
 
 // toward is the direction bit from cell a to its neighbor b.

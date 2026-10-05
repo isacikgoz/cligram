@@ -175,7 +175,8 @@ func (r *router) findIn(e Edge, group int, w Rect) ([]int, bool) {
 
 	// Arrive in a free cell beside the target, heading in.
 	goals := 0
-	for _, p := range r.portsOf(to, e.ToSide, false) {
+	aims := r.aims[e.Ref()]
+	for _, p := range r.portsOf(to, e.ToSide, false, aims[1]) {
 		in := opposite(sideDir(p.side))
 		gx, gy := p.x-dx[in], p.y-dy[in]
 		if !r.in(gx, gy) {
@@ -227,12 +228,12 @@ func (r *router) findIn(e Edge, group int, w Rect) ([]int, bool) {
 	// A group leaves through one cell where it can, so its edges share a
 	// trunk.
 	shared := false
-	for _, p := range r.portsOf(from, Auto, true) {
+	for _, p := range r.portsOf(from, Auto, true, aim{}) {
 		if r.ports[r.cellOf(p.x, p.y)] == group {
 			shared = true
 		}
 	}
-	for _, p := range r.portsOf(from, e.FromSide, true) {
+	for _, p := range r.portsOf(from, e.FromSide, true, aims[0]) {
 		pc := r.cellOf(p.x, p.y)
 		owner, used := r.ports[pc]
 		if used && owner != group {

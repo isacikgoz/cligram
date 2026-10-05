@@ -48,6 +48,9 @@ const (
 	PartLabel                  // an edge's label
 	PartFrame                  // a group's frame
 	PartFrameTitle             // a group's title, in its frame
+	PartLifeline               // a participant's lifeline, in a sequence diagram
+	PartNote                   // a note's border, in a sequence diagram
+	PartNoteText               // a note's text
 )
 
 func (p Part) String() string {
@@ -68,6 +71,12 @@ func (p Part) String() string {
 		return "frame"
 	case PartFrameTitle:
 		return "frame title"
+	case PartLifeline:
+		return "lifeline"
+	case PartNote:
+		return "note"
+	case PartNoteText:
+		return "note text"
 	}
 	return fmt.Sprintf("Part(%d)", int(p))
 }
@@ -232,8 +241,8 @@ func paletteSGR(st Style, status, class, line, label string) string {
 		return bold(status)
 	case PartMarker:
 		return status
-	case PartFrame:
-		return line // a frame is in the background, as lines not taken are
+	case PartFrame, PartLifeline, PartNote:
+		return line // in the background, as lines not taken are
 	case PartFrameTitle:
 		return "1"
 	case PartBorder:

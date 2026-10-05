@@ -7,6 +7,9 @@
 # go test -cpuprofile leaves the test binary behind
 *.test
 
+# a fuzz worker's crash trace (internal/crash)
+**/testdata/fuzz/crash-*.txt
+
 # goreleaser builds releases here
 /dist/
 /docs/demo/cligram

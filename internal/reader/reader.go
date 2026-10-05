@@ -1,7 +1,8 @@
 // Package reader reads a cligram drawing back from what it shows, as a
 // person would: boxes by their corners, lines followed from where they
 // leave a box, through junctions and crossings, to the arrowhead they end
-// in, and labels by the stretch of line they sit on. It knows nothing of
+// in, or to the one other box a link with no way joins, and labels by the
+// stretch of line they sit on. It knows nothing of
 // how the drawing was made, only what its glyphs mean, so it can check
 // that a picture says what its diagram says.
 //
@@ -148,14 +149,17 @@ type Box struct {
 	MarkerSGR  string
 }
 
-// Edge is a line from one box to another, by box index.
+// Edge is a line from one box to another, by box index. An undirected
+// edge, a line that joins two boxes with no arrowhead, has no way: From
+// is the box written first in the picture, reading rows top to bottom.
 type Edge struct {
-	From, To int
-	Label    string // "" for none
-	ArrowSGR string // how its arrowhead was colored
-	Style    string // solid, dashed or thick
-	ArrowX   int
-	ArrowY   int
+	From, To   int
+	Undirected bool
+	Label      string // "" for none
+	ArrowSGR   string // how its arrowhead was colored
+	Style      string // solid, dashed or thick
+	ArrowX     int
+	ArrowY     int
 }
 
 // Picture is what a drawing shows.
@@ -171,7 +175,8 @@ func (b Box) Text() string { return strings.Join(b.Lines, " ") }
 
 // Read reads text into a picture, and says what in it cannot be read:
 // a broken box, a line that ends in nothing, a line from two boxes at
-// once, a label that belongs to no edge or to several.
+// once that has arrowheads, or joins three or more boxes, a label that
+// belongs to no edge or to several.
 func Read(text string) (*Picture, error) {
 	r := &read{g: Parse(text), owner: map[pt]int{}, port: map[pt]uint8{}, frameCell: map[pt]bool{}}
 	r.frames()
@@ -337,7 +342,8 @@ func (r *read) box(x0, y0 int, f family) {
 				line.WriteString(c.G)
 			}
 		}
-		b.Lines = append(b.Lines, strings.TrimRight(line.String(), " "))
+		// A box wider than its text keeps the text in its middle.
+		b.Lines = append(b.Lines, strings.Trim(line.String(), " "))
 	}
 	for len(b.Lines) > 0 && b.Lines[len(b.Lines)-1] == "" {
 		b.Lines = b.Lines[:len(b.Lines)-1]
@@ -440,6 +446,8 @@ func (r *read) trace() {
 // tracer joins the cells that carry a line into networks.
 type tracer struct {
 	r *read
+	// links are the undirected edges, by the root of their line.
+	links map[pt]int
 	// parent unions everything that carries a line: line cells, ports,
 	// arrowheads.
 	parent map[pt]pt
@@ -603,12 +611,14 @@ func (t *tracer) arrowheads() []sink {
 func (t *tracer) edges(sinks []sink) {
 	r := t.r
 	sources := map[pt]map[int]bool{}
+	ports := map[pt]int{}
 	for p := range r.port {
 		root := t.find(p)
 		if sources[root] == nil {
 			sources[root] = map[int]bool{}
 		}
 		sources[root][r.owner[p]] = true
+		ports[root]++
 	}
 	ends := map[pt][]sink{}
 	for _, sk := range sinks {
@@ -629,11 +639,26 @@ func (t *tracer) edges(sinks []sink) {
 			style[root] = st
 		}
 	}
+	t.links = map[pt]int{}
 	for root := range roots {
 		from := sources[root]
 		switch {
 		case len(from) == 0:
 			r.fail("a line at (%d,%d) leaves no box", root.x, root.y)
+			continue
+		case len(from) == 2 && ports[root] == 2 && len(ends[root]) == 0:
+			// A link: one line, out of one box and into another, no way.
+			var boxes []int
+			for b := range from {
+				boxes = append(boxes, b)
+			}
+			sort.Ints(boxes)
+			st := style[root]
+			if st == "" {
+				st = "solid"
+			}
+			t.links[root] = len(r.edges)
+			r.edges = append(r.edges, Edge{From: boxes[0], To: boxes[1], Undirected: true, Style: st, ArrowX: -1, ArrowY: -1})
 			continue
 		case len(from) > 1:
 			r.fail("a line at (%d,%d) leaves %d boxes at once", root.x, root.y, len(from))
@@ -732,6 +757,16 @@ func (t *tracer) labels() {
 			for _, q := range adj[at] {
 				cut[[2]pt{at, q}] = true
 				far = append(far, q)
+			}
+		}
+		// On a link, it is the link's.
+		if len(far) > 0 {
+			if i, ok := t.links[t.find(far[0])]; ok {
+				if r.edges[i].Label != "" {
+					r.fail("the link between boxes %d and %d has two labels: %q and %q", r.edges[i].From, r.edges[i].To, r.edges[i].Label, l.text)
+				}
+				r.edges[i].Label = l.text
+				continue
 			}
 		}
 		// The side holding a box's port is the way back; the arrowheads on

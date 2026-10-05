@@ -11,12 +11,18 @@ relative placement when you want to say where things go.
 - `github.com/isacikgoz/cligram/bubble`: a Bubble Tea component on top.
 - `github.com/isacikgoz/cligram/yaml`: reads a diagram from YAML, with
   errors that give a line.
+- `github.com/isacikgoz/cligram/sequence`: sequence diagrams: participants,
+  messages, activations, notes and blocks (loop, alt, ...), drawn with the
+  same glyphs and themes. `ParseSequence` in package mermaid reads one.
 - `github.com/isacikgoz/cligram/mermaid`: reads a Mermaid flowchart
   (`flowchart`/`graph`, any direction; subgraphs are groups) or state
   diagram (`stateDiagram-v2`: `[*]` is Start and End, `<<choice>>` a
-  decision, a composite a frame after its box). Shapes map to kinds (`{}` decision,
+  decision, a composite a frame after its box). Links with no arrowhead
+  (`---`) are undirected, and a flowchart of only those is a network.
+  Shapes map to kinds (`{}` decision,
   `([])` and `(())` end, the rest steps); styles, `click` and subgraph
-  frames are read and left out.
+  frames are read and left out. `ParseSequence` reads a `sequenceDiagram`
+  onto package sequence, with errors that give a line.
 - `cmd/cligram`: draws Mermaid or YAML from a file or stdin. `-json` writes
   the drawing, size, fit and warnings; `cligram md` prints Markdown with
   its mermaid flowchart blocks drawn; `cligram watch flow.mmd` shows it
@@ -77,10 +83,22 @@ snippets below are compiled there and in `bubble/example_test.go` too.
 | `Diagram` | Nodes and edges, built in any order. Mistakes are collected, not returned per call: `d.Check()` lists them all. |
 | `Node(id, text, opts...)` | `As(Decision)` / `As(Terminal)` (default `Step`), `At("right of x")`, `Class("human")`, `In("group")`, `Sub(loader)`. Text breaks on `"\n"`; empty text shows the id. |
 | `Group(id, title, opts...)` | A titled frame round the nodes put `In` it; `Inside("parent")` nests it. No other node is in a frame, and frames side by side keep apart. |
-| `Edge(from, to, opts...)` | `Label("yes")`, `Line(cligram.Dashed)` or `Line(cligram.Thick)`, `From(cligram.Right)`, `To(cligram.Top)`. Edges between the same nodes are told apart by label (`EdgeRef{From, To, Label}`). |
+| `Edge(from, to, opts...)` | `Label("yes")`, `Line(cligram.Dashed)` or `Line(cligram.Thick)`, `Undirected()`, `From(cligram.Right)`, `To(cligram.Top)`. Edges between the same nodes are told apart by label (`EdgeRef{From, To, Label}`). |
 | `Layout(opts...)` | Places every node and routes every edge. Never fails: `l.Warnings()` lists mistakes and placements it had to leave out. |
 | `Render(State, Theme)` | Paints the layout. Never moves a box, so repaint freely. |
 | `State` | `Status` per node (`Idle`, `Active`, `Done`, `Failed`, `Waiting`), the edges `Taken`, the node in `Focus`. Focus is view state, not part of the diagram. |
+
+### Networks
+
+An edge made `Undirected()` is a link with no way: drawn with no
+arrowhead, a junction at each end, and never sharing a line with another
+edge (a line that branched would not say which boxes it links). A diagram
+whose edges are all links is a network (`layout_network.go`): each
+connected part spreads out from its middle, the node every other is
+fewest links from, in layers by distance, each layer ordered so links
+cross least. Top to bottom, a busy box is widened so each link has its own
+cell on the side facing it. In Mermaid, `---`, `-.-` and `===` are links;
+in YAML, `a -- b`, `-.-` and `==`.
 
 ### Placement
 
@@ -202,7 +220,7 @@ the parent's `StateMsg`.
 make test     # go test -race ./...
 make lint     # pinned golangci-lint built with this module's Go
 make golden   # rewrite testdata/*.golden; read the diff before committing
-make fuzz     # random diagrams, every drawing read back (FUZZTIME=2m)
+make fuzz     # random diagrams, every drawing read back (FUZZTIME=2m), flowcharts then sequences
 make pixels   # render in a real terminal engine, check the pixels (needs Node)
 make serve    # the browser playground on localhost:8418
 ```
@@ -223,10 +241,16 @@ oldest Go `go.mod` allows and the newest, with and without `-race`; lint;
 `internal/reader` reads a drawing from its text alone, as a person would:
 boxes by their corners, lines followed from where they leave a box,
 through junctions, crossings and labels, to an arrowhead; a label belongs
-to the one arrowhead past it. It knows only what the Unicode glyphs mean,
-never cligram's tables, so it cannot share their bugs. It refuses a
-drawing that is ambiguous: a line that leads nowhere, a line leaving two
-boxes, a label on a line two edges share.
+to the one arrowhead past it. A line joining exactly two boxes with no
+arrowhead is a link, and its label is its own. It knows only what the
+Unicode glyphs mean, never cligram's tables, so it cannot share their
+bugs. It refuses a drawing that is ambiguous: a line that leads nowhere,
+a line leaving two boxes with arrowheads, or three with none, a label on
+a line two edges share.
+
+Sequence diagrams have their own reader and harness in `sequence/`
+(`reader_test.go`, `harness_test.go`), held to the same rules; see
+`docs/design.md`.
 
 `harness_test.go` generates random diagrams (kinds, classes,
 sub-diagrams, cycles, self-loops, long, CJK and emoji text, valid and
